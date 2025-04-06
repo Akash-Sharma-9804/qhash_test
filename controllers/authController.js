@@ -31,9 +31,10 @@ exports.signup = async (req, res) => {
         return res.status(400).json({ error: "All fields are required" });
     }
 
-    const connection = await db.getConnection(); // Get a dedicated connection
+    let connection;
 
     try {
+        connection = await db.getConnection(); // Get a dedicated connection
         await connection.beginTransaction(); // ✅ Start transaction
 
         // Hash the password
@@ -48,22 +49,17 @@ exports.signup = async (req, res) => {
         const user_id = userResult.insertId;
 
         // Ensure user is added to user_history
-        try {
-            const [existingUser] = await connection.query(
-                "SELECT id FROM user_history WHERE id = ?",
-                [user_id]
-            );
+        const [existingUser] = await connection.query(
+            "SELECT id FROM user_history WHERE id = ?",
+            [user_id]
+        );
 
-            if (existingUser.length === 0) {
-                await connection.query(
-                    "INSERT INTO user_history (id, username, email) VALUES (?, ?, ?)",
-                    [user_id, username, email]
-                );
-                console.log(`✅ User ${user_id} added to user_history`);
-            }
-        } catch (historyError) {
-            console.error("❌ Error ensuring user in user_history:", historyError.message);
-            throw historyError; // Trigger rollback
+        if (existingUser.length === 0) {
+            await connection.query(
+                "INSERT INTO user_history (id, username, email) VALUES (?, ?, ?)",
+                [user_id, username, email]
+            );
+            console.log(`✅ User ${user_id} added to user_history`);
         }
 
         // Create initial conversation
@@ -87,7 +83,14 @@ exports.signup = async (req, res) => {
         });
 
     } catch (error) {
-        await connection.rollback(); // ❌ Rollback on any failure
+        // ✅ Safe rollback
+        if (connection && connection.rollback) {
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error("❌ Rollback failed:", rollbackError.message);
+            }
+        }
 
         if (error.code === "ER_DUP_ENTRY") {
             return res.status(400).json({ error: "Email already exists" });
@@ -95,8 +98,16 @@ exports.signup = async (req, res) => {
 
         console.error("❌ Signup failed:", error.message);
         return res.status(500).json({ error: "Signup failed", details: error.message });
+
     } finally {
-        connection.release(); // ✅ Always release connection
+        // ✅ Safe release
+        if (connection && connection.release) {
+            try {
+                connection.release();
+            } catch (releaseError) {
+                console.error("❌ Connection release failed:", releaseError.message);
+            }
+        }
     }
 };
 
