@@ -461,97 +461,117 @@ exports.getChatHistory = async (req, res) => {
 
 exports.askChatbot = async (req, res) => {
     console.log("✅ Received request at /chat:", req.body);
-  
+
     let { userMessage, conversation_id } = req.body;
     const user_id = req.user?.user_id;
-  
+
     console.log("🧪 user_id:", user_id);
     console.log("🧪 conversation_id:", conversation_id);
-  
+
     if (!user_id) {
-      return res.status(401).json({ error: "Unauthorized: User ID not found." });
+        return res.status(401).json({ error: "Unauthorized: User ID not found." });
     }
-  
+
     if (!userMessage) {
-      return res.status(400).json({ error: "User message is required" });
+        return res.status(400).json({ error: "User message is required" });
     }
-  
+
     try {
-      // 🔄 Create conversation if not given
-      if (!conversation_id || isNaN(conversation_id)) {
-        const [conversationResult] = await db.query(
-          "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-          [user_id, userMessage.substring(0, 20)]
+        // 🔄 Create conversation if not given
+        if (!conversation_id || isNaN(conversation_id)) {
+            const [conversationResult] = await db.query(
+                "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+                [user_id, userMessage.substring(0, 20)]
+            );
+            conversation_id = conversationResult.insertId;
+        }
+
+        // ✅ Verify conversation ownership
+        const [rows] = await db.query(
+            "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+            [conversation_id, user_id]
         );
-        conversation_id = conversationResult.insertId;
-      }
-  
-      // ✅ Verify conversation ownership
-      const [rows] = await db.query(
-        "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
-        [conversation_id, user_id]
-      );
-      
-      console.log("🧪 existingConversation rows:", rows);
-      
-      if (!rows.length) {
-        return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
-      }
-      
-  
-      // 🔄 Fetch last few messages
-      const [historyResultsRaw] = await db.query(
-        "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
-        [conversation_id]
-      );
-  
-      const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
-  
-      const chatHistory = historyResults.map((chat) => [
-        { role: "user", content: chat.message },
-        { role: "assistant", content: chat.response },
-      ]).flat();
-  
-      // 🧠 Append file data (if any)
-      const [files] = await db.query(
-        "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
-        [conversation_id]
-      );
-  
-      const combinedFileText = files.map(f => f.extracted_text).join("\n\n") || "";
-      const fileNames = files.map(f => f.file_path.split("/").pop());
-  
-      chatHistory.push({
-        role: "user",
-        content: combinedFileText
-          ? `${userMessage}\n\n[Here is some content from uploaded files that might help:]\n${combinedFileText}`
-          : userMessage,
-      });
-  
-      const openaiResponse = await openai.chat.completions.create({
-        model: "gpt-4",
-        messages: chatHistory,
-      });
-  
-      const aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
-  
-      await db.query(
-        "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
-        [conversation_id, userMessage, aiResponse]
-      );
-  
-      res.json({
-        success: true,
-        conversation_id,
-        response: aiResponse,
-        uploaded_files: fileNames,
-      });
-  
+
+        console.log("🧪 existingConversation rows:", rows);
+
+        if (!rows.length) {
+            return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
+        }
+
+        // 🔄 Fetch last few messages
+        const [historyResultsRaw] = await db.query(
+            "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
+            [conversation_id]
+        );
+
+        const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
+
+        const chatHistory = historyResults.map((chat) => [
+            { role: "user", content: chat.message },
+            { role: "assistant", content: chat.response },
+        ]).flat();
+
+        // 🧠 Append file data (if any)
+        const [files] = await db.query(
+            "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
+            [conversation_id]
+        );
+
+        const combinedFileText = files.map(f => f.extracted_text).join("\n\n") || "";
+        const fileNames = files.map(f => f.file_path.split("/").pop());
+
+        chatHistory.push({
+            role: "user",
+            content: combinedFileText
+                ? `${userMessage}\n\n[Here is some content from uploaded files that might help:]\n${combinedFileText}`
+                : userMessage,
+        });
+
+        // OpenAI API request
+        let openaiResponse;
+        try {
+            openaiResponse = await openai.chat.completions.create({
+                model: "gpt-4",
+                messages: chatHistory,
+            });
+        } catch (openaiError) {
+            console.error("❌ OpenAI API Error:", openaiError);
+            return res.status(500).json({ error: "Failed to get response from OpenAI", details: openaiError.message });
+        }
+
+        const aiResponse = openaiResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+
+        // Store the chat history in the database
+        try {
+            await db.query(
+                "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
+                [conversation_id, userMessage, aiResponse]
+            );
+        } catch (dbError) {
+            console.error("❌ Database Insert Error:", dbError);
+            return res.status(500).json({ error: "Failed to save chat history", details: dbError.message });
+        }
+
+        res.json({
+            success: true,
+            conversation_id,
+            response: aiResponse,
+            uploaded_files: fileNames,
+        });
+
     } catch (error) {
-      console.error("❌ Error in askChatbot:", error);
-      res.status(500).json({ error: "Internal server error", details: error.message });
+        console.error("❌ Error in askChatbot:", error);
+
+        // Handle connection reset errors
+        if (error.code === 'ECONNRESET') {
+            console.error("❌ Database connection was reset. Retrying...");
+            // Retry logic or alerting
+        }
+
+        res.status(500).json({ error: "Internal server error", details: error.message });
     }
-  };
+};
+
   
   
 
