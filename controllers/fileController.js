@@ -34,18 +34,15 @@ exports.uploadFiles = async (req, res) => {
       return res.status(400).json({ error: "Missing user_id." });
     }
 
-    const files = req.files;
-    if ((!files || files.length === 0) && !req.body.message) {
-      return res.status(400).json({ error: "No message or files provided." });
-    }
-
+    const files = req.files || [];
+    const userMessage = req.body.message?.trim();
     let { conversation_id } = req.body;
     let finalConversationId = conversation_id;
 
     if (!conversation_id) {
       const [convResult] = await db.query(
         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-        [user_id, "New Conversation"]
+        [user_id, userMessage?.slice(0, 20) || "New Conversation"]
       );
       finalConversationId = convResult.insertId;
     }
@@ -94,6 +91,16 @@ exports.uploadFiles = async (req, res) => {
       }
     }
 
+    // ⚡ If user sent a message, forward to chatbot
+    if (userMessage) {
+      const askChatbot = require("./chatController").askChatbot;
+      req.body.userMessage = userMessage;
+      req.body.conversation_id = finalConversationId;
+      req.user = { user_id };
+      return askChatbot(req, res);
+    }
+
+    // ⚡ Only files sent
     const botResponse = allText
       ? `Here's what I understood from your files:\n${allText.slice(0, 1000)}${allText.length > 1000 ? "..." : ""}`
       : "I received your files, but couldn't extract readable text from them.";
