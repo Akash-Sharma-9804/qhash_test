@@ -6,7 +6,9 @@ const Tesseract = require("tesseract.js");
 const fs = require("fs");
 const path = require("path");
 const db = require("../config/db");
-const uploadToFTP = require("../utils/uploadToFTP"); // Make sure this path is correct
+const uploadToFTP = require("../utils/ftpUploader"); // Make sure this path is correct
+ 
+
 
 // Multer Storage
 const storage = multer.diskStorage({
