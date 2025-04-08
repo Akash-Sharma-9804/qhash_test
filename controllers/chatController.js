@@ -577,10 +577,123 @@ exports.getChatHistory = async (req, res) => {
 // };
 
 
+// exports.askChatbot = async (req, res) => {
+//     console.log("✅ Received request at /chat:", req.body);
+
+//     let { userMessage, conversation_id } = req.body;
+//     const user_id = req.user?.user_id;
+
+//     if (!user_id) {
+//         console.log("❌ User ID not found in request.");
+//         return res.status(401).json({ error: "Unauthorized: User ID not found." });
+//     }
+
+//     if (!userMessage) {
+//         return res.status(400).json({ error: "User message is required" });
+//     }
+
+//     try {
+//         console.log(`🔹 User ID: ${user_id}, Conversation ID: ${conversation_id}`);
+
+//         // ✅ Create a new conversation if not provided
+//         if (!conversation_id || isNaN(conversation_id)) {
+//             console.log("⚠ No conversation ID provided. Creating a new conversation...");
+
+//             const [conversationResult] = await db.query(
+//                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+//                 [user_id, userMessage.substring(0, 20)]
+//             );
+
+//             if (!conversationResult || !conversationResult.insertId) {
+//                 console.error("❌ Failed to create conversation.");
+//                 return res.status(500).json({ error: "Database error: No insertId returned." });
+//             }
+
+//             conversation_id = conversationResult.insertId;
+//             console.log("✅ New conversation created with ID:", conversation_id);
+//         }
+
+//         // ✅ Ensure conversation belongs to the user
+//         const [existingConversation] = await db.query(
+//             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+//             [conversation_id, user_id]
+//         );
+
+//         if (!existingConversation || existingConversation.length === 0) {
+//             console.log(`❌ Unauthorized access: User ${user_id} does not own conversation ${conversation_id}`);
+//             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
+//         }
+
+//         console.log("🔹 Fetching last 5 messages for conversation:", conversation_id);
+
+//         // ✅ Get last 5 message pairs
+//         const [historyResultsRaw] = await db.query(
+//             "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
+//             [conversation_id]
+//         );
+
+//         const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
+
+//         const chatHistory = historyResults.map((chat) => [
+//             { role: "user", content: chat.message },
+//             { role: "assistant", content: chat.response },
+//         ]).flat();
+
+//         // ✅ Fetch uploaded file contents and filenames
+//         const [files] = await db.query(
+//             "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
+//             [conversation_id]
+//         );
+
+//         // Ensure `files` is an array, even if no files are found
+//         const safeFiles = Array.isArray(files) ? files : [];
+        
+//         const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
+//         const fileNames = safeFiles.map(f => f.file_path.split("/").pop()); // for frontend display
+
+//         // ✅ Append user message + extracted file text
+//         chatHistory.push({
+//             role: "user",
+//             content: combinedFileText
+//                 ? `${userMessage}\n\n[Here is some content from uploaded files that might help:]\n${combinedFileText}`
+//                 : userMessage,
+//         });
+
+//         console.log("🔹 Sending chat history to OpenAI...");
+
+//         // ✅ Get OpenAI response
+//         const openaiResponse = await openai.chat.completions.create({
+//             model: "gpt-4",
+//             messages: chatHistory,
+//         });
+
+//         const aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+
+//         console.log("🔹 Storing response in chat history...");
+
+//         // ✅ Store in DB
+//         await db.query(
+//             "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
+//             [conversation_id, userMessage, aiResponse]
+//         );
+
+//         res.json({
+//             success: true,
+//             conversation_id,
+//             response: aiResponse,
+//             uploaded_files: fileNames,
+//         });
+
+//     } catch (error) {
+//         console.error("❌ Error in askChatbot:", error);
+//         res.status(500).json({ error: "Internal server error", details: error.message });
+//     }
+// };
+
 exports.askChatbot = async (req, res) => {
     console.log("✅ Received request at /chat:", req.body);
 
-    let { userMessage, conversation_id } = req.body;
+    let { userMessage, conversation_id, extracted_summary } = req.body; // Get extracted_summary from request body
     const user_id = req.user?.user_id;
 
     if (!user_id) {
@@ -588,8 +701,8 @@ exports.askChatbot = async (req, res) => {
         return res.status(401).json({ error: "Unauthorized: User ID not found." });
     }
 
-    if (!userMessage) {
-        return res.status(400).json({ error: "User message is required" });
+    if (!userMessage && !extracted_summary) {
+        return res.status(400).json({ error: "User message or extracted summary is required" });
     }
 
     try {
@@ -652,11 +765,15 @@ exports.askChatbot = async (req, res) => {
         const fileNames = safeFiles.map(f => f.file_path.split("/").pop()); // for frontend display
 
         // ✅ Append user message + extracted file text
+        let fullUserMessage = userMessage || "";
+        if (extracted_summary) {
+            fullUserMessage += `\n\n[Here is some content from uploaded files that might help:]\n${extracted_summary}`;
+        }
+        fullUserMessage += combinedFileText ? `\n\n[File contents:]\n${combinedFileText}` : "";
+
         chatHistory.push({
             role: "user",
-            content: combinedFileText
-                ? `${userMessage}\n\n[Here is some content from uploaded files that might help:]\n${combinedFileText}`
-                : userMessage,
+            content: fullUserMessage,
         });
 
         console.log("🔹 Sending chat history to OpenAI...");
@@ -674,7 +791,7 @@ exports.askChatbot = async (req, res) => {
         // ✅ Store in DB
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
-            [conversation_id, userMessage, aiResponse]
+            [conversation_id, fullUserMessage, aiResponse]
         );
 
         res.json({
@@ -689,6 +806,5 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
-
 
 
