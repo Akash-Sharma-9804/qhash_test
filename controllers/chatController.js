@@ -487,16 +487,17 @@ exports.askChatbot = async (req, res) => {
       }
   
       // ✅ Verify conversation ownership
-      const [existingConversation] = await db.query(
+      const [rows] = await db.query(
         "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
         [conversation_id, user_id]
       );
-  
-      console.log("🧪 existingConversation:", existingConversation);
-  
-      if (!existingConversation?.length) {
+      
+      console.log("🧪 existingConversation rows:", rows);
+      
+      if (!rows.length) {
         return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
       }
+      
   
       // 🔄 Fetch last few messages
       const [historyResultsRaw] = await db.query(
