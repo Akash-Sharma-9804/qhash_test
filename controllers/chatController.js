@@ -465,6 +465,9 @@ exports.askChatbot = async (req, res) => {
     let { userMessage, conversation_id } = req.body;
     const user_id = req.user?.user_id;
   
+    console.log("🧪 user_id:", user_id);
+    console.log("🧪 conversation_id:", conversation_id);
+  
     if (!user_id) {
       return res.status(401).json({ error: "Unauthorized: User ID not found." });
     }
@@ -474,28 +477,28 @@ exports.askChatbot = async (req, res) => {
     }
   
     try {
+      // 🔄 Create conversation if not given
       if (!conversation_id || isNaN(conversation_id)) {
         const [conversationResult] = await db.query(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
           [user_id, userMessage.substring(0, 20)]
         );
-  
-        if (!conversationResult?.insertId) {
-          return res.status(500).json({ error: "Database error: No insertId returned." });
-        }
-  
         conversation_id = conversationResult.insertId;
       }
   
+      // ✅ Verify conversation ownership
       const [existingConversation] = await db.query(
         "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
         [conversation_id, user_id]
       );
   
+      console.log("🧪 existingConversation:", existingConversation);
+  
       if (!existingConversation?.length) {
         return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
       }
   
+      // 🔄 Fetch last few messages
       const [historyResultsRaw] = await db.query(
         "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
         [conversation_id]
@@ -508,6 +511,7 @@ exports.askChatbot = async (req, res) => {
         { role: "assistant", content: chat.response },
       ]).flat();
   
+      // 🧠 Append file data (if any)
       const [files] = await db.query(
         "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
         [conversation_id]
@@ -547,6 +551,7 @@ exports.askChatbot = async (req, res) => {
       res.status(500).json({ error: "Internal server error", details: error.message });
     }
   };
+  
   
 
 
