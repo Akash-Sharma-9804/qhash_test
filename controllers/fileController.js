@@ -123,7 +123,7 @@ exports.uploadFiles = async (req, res) => {
         let { conversation_id } = req.body;
         let finalConversationId = conversation_id;
 
-        // 🆕 Create new conversation if not given
+        // Create new conversation if not given
         if (!conversation_id) {
             const [convResult] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
@@ -176,7 +176,7 @@ exports.uploadFiles = async (req, res) => {
             }
         }
 
-        // 🔁 Return info to frontend, chatbot will be triggered in next call
+        // Return info to frontend, chatbot will be triggered in the next call
         return res.status(201).json({
             success: true,
             conversation_id: finalConversationId,
