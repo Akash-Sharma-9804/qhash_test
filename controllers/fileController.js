@@ -56,7 +56,6 @@ exports.uploadFiles = async (req, res) => {
       let { conversation_id } = req.body;
       let finalConversationId = conversation_id;
   
-      // Create new conversation if not provided
       if (!conversation_id) {
         const [convResult] = await db.query(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
@@ -75,6 +74,8 @@ exports.uploadFiles = async (req, res) => {
         console.log(`📄 Processing file: ${fileName} | Type: ${file.mimetype}`);
   
         let extractedText = "";
+        let ftpPath = "";
+  
         try {
           extractedText = await extractText(localPath, file.mimetype);
           console.log("✅ Text extracted");
@@ -82,7 +83,6 @@ exports.uploadFiles = async (req, res) => {
           console.error("❌ Failed to extract text from file:", err.message);
         }
   
-        let ftpPath = "";
         try {
           ftpPath = await uploadToFTP(localPath, fileName);
           console.log("✅ Uploaded to FTP:", ftpPath);
@@ -90,6 +90,7 @@ exports.uploadFiles = async (req, res) => {
           console.error("❌ FTP upload failed:", err.message);
         }
   
+        // ✅ Only delete after both operations are done
         try {
           if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
           console.log("🗑️ Deleted local file:", localPath);
@@ -97,7 +98,6 @@ exports.uploadFiles = async (req, res) => {
           console.warn("⚠️ Failed to delete local file:", err.message);
         }
   
-        // Save info to DB only if FTP path exists
         if (ftpPath) {
           const [fileResult] = await db.query(
             "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
@@ -117,7 +117,6 @@ exports.uploadFiles = async (req, res) => {
         }
       }
   
-      // Compose AI-style bot response
       const botResponse = allText
         ? `Here's what I understood from your files:\n${allText.slice(0, 1000)}${allText.length > 1000 ? "..." : ""}`
         : "I received your files, but couldn't extract readable text from them.";
@@ -136,6 +135,7 @@ exports.uploadFiles = async (req, res) => {
       });
     }
   };
+  
   
 
 // Multer Middleware
