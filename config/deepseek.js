@@ -1,13 +1,9 @@
-// deepseek.js (If needed for DeepSeek)
-const axios = require("axios");
+const OpenAI = require("openai");
 require("dotenv").config();
 
-const deepseekAPI = axios.create({
-  baseURL: "https://api.deepseek.com", // Example base URL, change accordingly
-  headers: {
-    "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-    "Content-Type": "application/json"
-  }
+const deepseek = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com",
 });
 
-module.exports = deepseekAPI;
+module.exports = deepseek;

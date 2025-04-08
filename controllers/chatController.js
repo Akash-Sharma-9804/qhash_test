@@ -1,7 +1,7 @@
 
 const db = require("../config/db");
 const openai = require("../config/openai");
-const deepseekAPI = require("../config/deepseek"); 
+const deepseek = require("../config/deepseek"); 
 const { query } = require("../config/db"); // make sure you're importing correctly
 
 // ✅ Create a new conversation
@@ -892,11 +892,11 @@ exports.askChatbot = async (req, res) => {
             aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         } else {
             // DeepSeek API
-            const deepseekResponse = await deepseekAPI.post("/query", {  // Assuming DeepSeek has a /query endpoint
-                prompt: fullUserMessage,  
-                history: chatHistory,     
-            });
-
+            const deepseekResponse = await deepseek.chat.completions.create({
+                model: "deepseek-chat",
+                messages: chatHistory,
+              });
+            
             aiResponse = deepseekResponse?.data?.answer || "Sorry, I couldn't process that.";
         }
 
