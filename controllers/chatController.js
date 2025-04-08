@@ -873,8 +873,8 @@ exports.askChatbot = async (req, res) => {
                 "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
                 "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
                 "If someone asks about your knowledge cutoff date, *only say*: " +
-                `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' ` +
-                "Do not include explanations, thoughts, or extra details—just answer directly."
+                `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' ` 
+                
         };
         chatHistory.unshift(system_prompt);
 
