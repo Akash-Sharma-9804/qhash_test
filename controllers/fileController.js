@@ -38,68 +38,7 @@ const extractText = async (filePath, mimeType) => {
     }
 };
 
-// File Upload Handler
-// exports.uploadFiles = async (req, res) => {
-//     try {
-//         const user_id = req.user?.user_id;
-//         if (!user_id) {
-//             return res.status(401).json({ error: "Unauthorized: User ID is required." });
-//         }
 
-//         const files = req.files;
-//         if (!files || files.length === 0) {
-//             return res.status(400).json({ error: "No files provided." });
-//         }
-
-//         let { conversation_id } = req.body;
-//         let finalConversationId = conversation_id;
-
-//         // Create new conversation if not provided
-//         if (!conversation_id) {
-//             const [convResult] = await db.query(
-//                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-//                 [user_id, "New Conversation"]
-//             );
-//             finalConversationId = convResult.insertId;
-//         }
-
-//         const results = [];
-
-//         for (const file of files) {
-//             const localPath = file.path;
-//             const fileName = path.basename(file.filename);
-
-//             const extractedText = await extractText(localPath, file.mimetype);
-//             const ftpPath = await uploadToFTP(localPath, fileName);
-
-//             // Insert into DB
-//             const [fileResult] = await db.query(
-//                 "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
-//                 [user_id, ftpPath, extractedText, finalConversationId]
-//             );
-
-//             results.push({
-//                 file_id: fileResult.insertId,
-//                 file_name: file.originalname,
-//                 file_url: ftpPath,
-//                 extracted_text: extractedText,
-//             });
-
-//             // Optionally delete local file after upload
-//             fs.unlinkSync(localPath);
-//         }
-
-//         return res.status(201).json({
-//             success: true,
-//             conversation_id: finalConversationId,
-//             files: results,
-//         });
-
-//     } catch (err) {
-//         console.error("❌ Error in uploadFiles:", err);
-//         return res.status(500).json({ error: "Failed to upload files", details: err.message });
-//     }
-// };
 
 // File Upload Handler
 exports.uploadFiles = async (req, res) => {
