@@ -1,7 +1,7 @@
 const express = require("express");
 const { uploadFiles } = require("../controllers/fileController");
 const { uploadMiddleware } = require("../middleware/uploadMiddleware");
-const verifyToken = require("../middleware/verifyToken"); // 👈
+const verifyToken = require("../middleware/authMiddleware"); // 👈
 
 const router = express.Router();
 
