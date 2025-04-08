@@ -125,7 +125,7 @@ const corsOptions = {
   origin: allowedOrigins,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "Accept", "Origin"], // Ensure 'Origin' is included
 };
 
 // ✅ Apply CORS to all routes
