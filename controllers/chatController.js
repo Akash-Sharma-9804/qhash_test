@@ -859,6 +859,25 @@ exports.askChatbot = async (req, res) => {
             .flat()
             .filter(m => m?.content); // Filter out empty or undefined messages
 
+        // ✅ Insert system prompt with today's date
+        const currentDate = new Date().toLocaleDateString('en-US', {
+            year: 'numeric', month: 'long', day: 'numeric'
+        });
+
+        const system_prompt = {
+            role: "system",
+            content:
+                "You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
+                "When you were developed, you were created in 2024 by the Quantumhash development team. " +
+                "Always answer *directly* and *briefly* without any additional thinking or reasoning steps. " +
+                "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+                "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+                "If someone asks about your knowledge cutoff date, *only say*: " +
+                `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' ` +
+                "Do not include explanations, thoughts, or extra details—just answer directly."
+        };
+        chatHistory.unshift(system_prompt);
+
         // Step 4: Fetch uploaded file contents
         const [files] = await db.query(
             "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
@@ -892,7 +911,6 @@ exports.askChatbot = async (req, res) => {
             });
             aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         } else {
-            // ✅ DeepSeek API via SDK
             const deepseekResponse = await deepseek.chat.completions.create({
                 model: "deepseek-chat",
                 messages: chatHistory,
@@ -922,6 +940,7 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
 
 
