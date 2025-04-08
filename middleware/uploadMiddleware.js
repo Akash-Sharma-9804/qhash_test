@@ -1,8 +1,5 @@
 const multer = require("multer");
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, "uploads/"),
-    filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
-});
+const storage = multer.memoryStorage(); // Use memory instead of disk
 
-exports.uploadMiddleware = multer({ storage }).array("files", 10); // Support multiple files
+exports.uploadMiddleware = multer({ storage }).array("files", 10);

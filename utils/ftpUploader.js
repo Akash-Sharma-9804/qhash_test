@@ -1,6 +1,6 @@
 const ftp = require("basic-ftp");
 
-const uploadToFTP = async (localPath, remoteFileName) => {
+const uploadToFTP = async (buffer, remoteFileName) => {
   const client = new ftp.Client();
   client.ftp.verbose = true;
 
@@ -16,12 +16,10 @@ const uploadToFTP = async (localPath, remoteFileName) => {
     await client.ensureDir(remoteDir);
 
     const remotePath = `${remoteDir}/${remoteFileName}`;
-    await client.uploadFrom(localPath, remotePath);
+    await client.uploadFrom(Buffer.from(buffer), remotePath);
 
     console.log("✅ File uploaded to FTP:", remotePath);
-
-    // Return public path (relative URL for frontend)
-    return `/Quantum_AI/uploads/${remoteFileName}`;
+    return `/Quantum_AI/uploads/${remoteFileName}`; // Return public path
   } catch (err) {
     console.error("❌ FTP Upload Error:", err);
     throw err;
