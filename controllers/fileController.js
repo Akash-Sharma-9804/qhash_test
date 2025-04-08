@@ -1,85 +1,12 @@
-// const multer = require("multer");
-// const pdfParse = require("pdf-parse");
-// const mammoth = require("mammoth");
-// const Tesseract = require("tesseract.js");
-// const fs = require("fs");
-// const db = require("../config/db");
-
-// // Multer Storage
-// const storage = multer.diskStorage({
-//     destination: (req, file, cb) => cb(null, "uploads/"),
-//     filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
-// });
-// const upload = multer({ storage });
-
-// // Extract Text
-// const extractText = async (filePath, fileType) => {
-//     try {
-//         if (fileType === "pdf") {
-//             const dataBuffer = fs.readFileSync(filePath);
-//             return (await pdfParse(dataBuffer)).text;
-//         } else if (fileType === "txt") {
-//             return fs.readFileSync(filePath, "utf8");
-//         } else if (fileType === "docx") {
-//             return (await mammoth.extractRawText({ path: filePath })).value;
-//         } else if (fileType.startsWith("image")) {
-//             return (await Tesseract.recognize(filePath, "eng")).data.text;
-//         } else {
-//             return "Unsupported file type";
-//         }
-//     } catch (error) {
-//         console.error("Error extracting text:", error);
-//         return null;
-//     }
-// };
-
-// // Upload File Route
-// // exports.uploadFile = async (req, res) => {
-// //     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-// //     const filePath = req.file.path;
-// //     const fileType = req.file.mimetype;
-// //     const user_id = req.user.user_id;
-
-// //     const extractedText = await extractText(filePath, fileType);
-// //     if (!extractedText) return res.status(500).json({ error: "Text extraction failed" });
-
-// //     const sql = "INSERT INTO uploaded_files (user_id, file_path, extracted_text) VALUES (?, ?, ?)";
-// //     db.query(sql, [user_id, filePath, extractedText], (err) => {
-// //         if (err) return res.status(500).json({ error: err.message });
-// //     });
-
-// //     res.json({ message: "File uploaded successfully", extractedText });
-// // };
-// exports.uploadFile = async (req, res) => {
-//     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-//     const filePath = req.file.path;
-//     const fileType = req.file.mimetype;
-//     const user_id = req.user.user_id;
-
-//     const extractedText = await extractText(filePath, fileType);
-//     if (!extractedText) return res.status(500).json({ error: "Text extraction failed" });
-
-//     const sql = "INSERT INTO uploaded_files (user_id, file_path, extracted_text) VALUES (?, ?, ?)";
-//     db.query(sql, [user_id, filePath, extractedText], (err, result) => {
-//         if (err) return res.status(500).json({ error: err.message });
-
-//         // Send the file ID so the frontend can attach it to messages
-//         res.json({ message: "File uploaded successfully", file_id: result.insertId });
-//     });
-// };
-
-// exports.uploadMiddleware = upload.single("file");
-
-
 
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const Tesseract = require("tesseract.js");
 const fs = require("fs");
+const path = require("path");
 const db = require("../config/db");
+const uploadToFTP = require("../utils/uploadToFTP"); // Make sure this path is correct
 
 // Multer Storage
 const storage = multer.diskStorage({
@@ -88,153 +15,166 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Extract Text
-const extractText = async (filePath, fileType) => {
+// Text Extraction
+const extractText = async (filePath, mimeType) => {
     try {
-        if (fileType === "pdf") {
+        if (mimeType === "application/pdf") {
             const dataBuffer = fs.readFileSync(filePath);
             return (await pdfParse(dataBuffer)).text;
-        } else if (fileType === "txt") {
+        } else if (mimeType === "text/plain") {
             return fs.readFileSync(filePath, "utf8");
-        } else if (fileType === "docx") {
+        } else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
             return (await mammoth.extractRawText({ path: filePath })).value;
-        } else if (fileType.startsWith("image")) {
+        } else if (mimeType.startsWith("image")) {
             return (await Tesseract.recognize(filePath, "eng")).data.text;
         } else {
             return "Unsupported file type";
         }
-    } catch (error) {
-        console.error("Error extracting text:", error);
+    } catch (err) {
+        console.error("❌ Text extraction error:", err);
         return null;
     }
 };
 
-// Upload Multiple Files
+// File Upload Handler
 // exports.uploadFiles = async (req, res) => {
 //     try {
-//         console.log("✅ Received file upload request:", req.body);
-
-//         // ✅ Extract user_id safely
 //         const user_id = req.user?.user_id;
 //         if (!user_id) {
-//             console.log("❌ User ID is missing from the request.");
 //             return res.status(401).json({ error: "Unauthorized: User ID is required." });
 //         }
 
-//         let { file_path, extracted_text, conversation_id } = req.body;
-
-//         if (!file_path) {
-//             return res.status(400).json({ error: "File path is required." });
+//         const files = req.files;
+//         if (!files || files.length === 0) {
+//             return res.status(400).json({ error: "No files provided." });
 //         }
 
-//         if (!extracted_text) {
-//             extracted_text = ""; // Ensure extracted_text is never undefined
-//         }
-
+//         let { conversation_id } = req.body;
 //         let finalConversationId = conversation_id;
 
-//         // ✅ Create a new conversation if one is not provided
+//         // Create new conversation if not provided
 //         if (!conversation_id) {
-//             console.log("⚠ No conversation ID provided. Creating a new conversation...");
-
 //             const [convResult] = await db.query(
 //                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
 //                 [user_id, "New Conversation"]
 //             );
-
-//             if (!convResult.insertId) {
-//                 throw new Error("Database error: Failed to create a conversation.");
-//             }
-
 //             finalConversationId = convResult.insertId;
-//             console.log("✅ New conversation created with ID:", finalConversationId);
 //         }
 
-//         // ✅ Insert uploaded file details
-//         const [fileResult] = await db.query(
-//             "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
-//             [user_id, file_path, extracted_text, finalConversationId]
-//         );
+//         const results = [];
 
-//         if (!fileResult.insertId) {
-//             throw new Error("Database error: Failed to insert file details.");
+//         for (const file of files) {
+//             const localPath = file.path;
+//             const fileName = path.basename(file.filename);
+
+//             const extractedText = await extractText(localPath, file.mimetype);
+//             const ftpPath = await uploadToFTP(localPath, fileName);
+
+//             // Insert into DB
+//             const [fileResult] = await db.query(
+//                 "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
+//                 [user_id, ftpPath, extractedText, finalConversationId]
+//             );
+
+//             results.push({
+//                 file_id: fileResult.insertId,
+//                 file_name: file.originalname,
+//                 file_url: ftpPath,
+//                 extracted_text: extractedText,
+//             });
+
+//             // Optionally delete local file after upload
+//             fs.unlinkSync(localPath);
 //         }
 
-//         console.log("✅ File uploaded successfully with ID:", fileResult.insertId);
-//         return res.status(201).json({ 
-//             success: true, 
-//             file_id: fileResult.insertId, 
-//             conversation_id: finalConversationId 
+//         return res.status(201).json({
+//             success: true,
+//             conversation_id: finalConversationId,
+//             files: results,
 //         });
 
-//     } catch (error) {
-//         console.error("❌ Error in uploadFiles:", error);
-//         return res.status(500).json({ error: "Failed to upload file", details: error.message });
+//     } catch (err) {
+//         console.error("❌ Error in uploadFiles:", err);
+//         return res.status(500).json({ error: "Failed to upload files", details: err.message });
 //     }
 // };
+
+// File Upload Handler
 exports.uploadFiles = async (req, res) => {
     try {
-        console.log("✅ Received file upload request:", req.body);
-
-        // ✅ Extract user_id from authentication
         const user_id = req.user?.user_id;
         if (!user_id) {
-            console.log("❌ User ID is missing from the request.");
             return res.status(401).json({ error: "Unauthorized: User ID is required." });
         }
 
-        let { file_path, extracted_text = "", conversation_id } = req.body; // ✅ Default value for extracted_text
-
-        // ✅ Validate required fields
-        if (!file_path) {
-            return res.status(400).json({ error: "File path is required." });
+        const files = req.files;
+        if (!files || files.length === 0) {
+            return res.status(400).json({ error: "No files provided." });
         }
 
+        let { conversation_id } = req.body;
         let finalConversationId = conversation_id;
 
-        // ✅ Create a new conversation if one is not provided
+        // Create new conversation if not provided
         if (!conversation_id) {
-            console.log("⚠ No conversation ID provided. Creating a new conversation...");
-
             const [convResult] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
                 [user_id, "New Conversation"]
             );
+            finalConversationId = convResult.insertId;
+        }
 
-            if (!convResult.insertId) {
-                console.error("❌ Database error: Failed to create a conversation.");
-                return res.status(500).json({ error: "Failed to create a new conversation." });
+        const results = [];
+        let allText = ""; // ✅ Collect extracted text for AI response
+
+        for (const file of files) {
+            const localPath = file.path;
+            const fileName = path.basename(file.filename);
+
+            const extractedText = await extractText(localPath, file.mimetype);
+            const ftpPath = await uploadToFTP(localPath, fileName);
+
+            // Save to DB
+            const [fileResult] = await db.query(
+                "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
+                [user_id, ftpPath, extractedText, finalConversationId]
+            );
+
+            results.push({
+                file_id: fileResult.insertId,
+                file_name: file.originalname,
+                file_url: ftpPath,
+                extracted_text: extractedText,
+            });
+
+            // ✅ Append to combined extracted text
+            if (extractedText) {
+                allText += `\n---\n${extractedText}`;
             }
 
-            finalConversationId = convResult.insertId;
-            console.log("✅ New conversation created with ID:", finalConversationId);
+            // ✅ Optionally delete local file
+            fs.unlinkSync(localPath);
         }
 
-        // ✅ Insert uploaded file details into the database
-        const [fileResult] = await db.query(
-            "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
-            [user_id, file_path, extracted_text, finalConversationId]
-        );
+        // ✅ Generate basic bot response from text
+        const botResponse = allText
+            ? `Here's what I understood from your files:\n${allText.slice(0, 1000)}${allText.length > 1000 ? '...' : ''}`
+            : "I received your files, but couldn't extract readable text.";
 
-        if (!fileResult.insertId) {
-            console.error("❌ Database error: Failed to insert file details.");
-            return res.status(500).json({ error: "Failed to save file details." });
-        }
-
-        console.log("✅ File uploaded successfully with ID:", fileResult.insertId);
-        return res.status(201).json({ 
-            success: true, 
-            file_id: fileResult.insertId, 
-            conversation_id: finalConversationId 
+        return res.status(201).json({
+            success: true,
+            conversation_id: finalConversationId,
+            files: results,
+            response: botResponse, // ✅ Added AI-style response
         });
 
-    } catch (error) {
-        console.error("❌ Error in uploadFiles:", error);
-        return res.status(500).json({ error: "Failed to upload file", details: error.message });
+    } catch (err) {
+        console.error("❌ Error in uploadFiles:", err);
+        return res.status(500).json({ error: "Failed to upload files", details: err.message });
     }
 };
 
 
 
-// Multer Middleware for multiple files
+// Multer Middleware
 exports.uploadMiddleware = upload.array("files", 10);
