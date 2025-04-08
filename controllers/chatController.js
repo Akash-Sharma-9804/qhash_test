@@ -829,9 +829,8 @@ exports.askChatbot = async (req, res) => {
         if (!conversation_id || isNaN(conversation_id)) {
             const [conversationResult] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-                [user_id, userMessage.substring(0, 20)]
+                [user_id, userMessage?.substring(0, 20) || "New Chat"]
             );
-
             conversation_id = conversationResult.insertId;
             console.log("✅ New conversation created with ID:", conversation_id);
         }
@@ -841,30 +840,30 @@ exports.askChatbot = async (req, res) => {
             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
             [conversation_id, user_id]
         );
-
         if (!existingConversation || existingConversation.length === 0) {
-            console.log(`❌ Unauthorized access: User ${user_id} does not own conversation ${conversation_id}`);
             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
         }
 
-        // Step 3: Fetch last 5 messages from the conversation
+        // Step 3: Fetch last 5 messages
         const [historyResultsRaw] = await db.query(
             "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
             [conversation_id]
         );
-
         const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
-        const chatHistory = historyResults.map((chat) => [
-            { role: "user", content: chat.message },
-            { role: "assistant", content: chat.response },
-        ]).flat();
 
-        // Step 4: Fetch uploaded file contents and filenames
+        const chatHistory = historyResults
+            .map((chat) => [
+                { role: "user", content: chat.message },
+                { role: "assistant", content: chat.response },
+            ])
+            .flat()
+            .filter(m => m?.content); // Filter out empty or undefined messages
+
+        // Step 4: Fetch uploaded file contents
         const [files] = await db.query(
             "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
             [conversation_id]
         );
-
         const safeFiles = Array.isArray(files) ? files : [];
         const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
         const fileNames = safeFiles.map(f => f.file_path.split("/").pop());
@@ -874,39 +873,43 @@ exports.askChatbot = async (req, res) => {
         if (extracted_summary) {
             fullUserMessage += `\n\n[Here is some content from uploaded files that might help:]\n${extracted_summary}`;
         }
-        fullUserMessage += combinedFileText ? `\n\n[File contents:]\n${combinedFileText}` : "";
+        if (combinedFileText) {
+            fullUserMessage += `\n\n[File contents:]\n${combinedFileText}`;
+        }
 
         chatHistory.push({
             role: "user",
             content: fullUserMessage,
         });
 
-        // Step 6: Choose which API to use based on USE_OPENAI flag
+        // Step 6: AI API selection
         let aiResponse = "";
+
         if (process.env.USE_OPENAI === "true") {
-            // OpenAI API
             const openaiResponse = await openai.chat.completions.create({
                 model: "gpt-4",
                 messages: chatHistory,
             });
             aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         } else {
-            // DeepSeek API
+            // ✅ DeepSeek API via SDK
             const deepseekResponse = await deepseek.chat.completions.create({
                 model: "deepseek-chat",
                 messages: chatHistory,
-              });
-            
-            aiResponse = deepseekResponse?.data?.answer || "Sorry, I couldn't process that.";
+            });
+
+            console.log("🧠 DeepSeek raw response:", deepseekResponse);
+
+            aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
 
-        // Step 7: Store the response
+        // Step 7: Save chat
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
             [conversation_id, fullUserMessage, aiResponse]
         );
 
-        // Step 8: Return response
+        // Step 8: Return to client
         res.json({
             success: true,
             conversation_id,
@@ -919,5 +922,6 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
 
