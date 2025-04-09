@@ -1149,10 +1149,11 @@ exports.askChatbot = async (req, res) => {
         const combinedExtractedText = files.map(f => f.extracted_text).join("\n\n");
 
         // Step 6: Append file list to user message
-        let fullUserMessage = userMessage || "";
-        if (fileNames.length > 0) {
-            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
-        }
+let fullUserMessage = userMessage || "";
+if (fileNames.length > 0) {
+    const fileListText = fileNames.map(name => `📎 ${name}`).join("\n");
+    fullUserMessage += `\n\n[Uploaded files:]\n${fileListText}`;
+}
 
         chatHistory.push({
             role: "user",
@@ -1176,16 +1177,16 @@ exports.askChatbot = async (req, res) => {
         }
 
         // Step 8: Save message + files + extracted text
-        await db.query(
-            "INSERT INTO chat_history (conversation_id, user_message, response, file_path, extracted_text) VALUES (?, ?, ?, ?, ?)",
-            [
-                conversation_id,
-                fullUserMessage,
-                aiResponse,
-                filePaths.join(", ") || null,
-                combinedExtractedText || null,
-            ]
-        );
+await db.query(
+    "INSERT INTO chat_history (conversation_id, user_message, response, file_path, extracted_text) VALUES (?, ?, ?, ?, ?)",
+    [
+        conversation_id,
+        fullUserMessage,
+        aiResponse,
+        filePaths.join(", ") || null,
+        combinedExtractedText || null,
+    ]
+);
 
         // Step 9: Return
         res.json({
