@@ -1082,7 +1082,6 @@ exports.askChatbot = async (req, res) => {
     const user_id = req.user?.user_id;
 
     if (!user_id) {
-        console.log("❌ User ID not found in request.");
         return res.status(401).json({ error: "Unauthorized: User ID not found." });
     }
 
@@ -1091,19 +1090,16 @@ exports.askChatbot = async (req, res) => {
     }
 
     try {
-        console.log(`🔹 User ID: ${user_id}, Conversation ID: ${conversation_id}`);
-
-        // Step 1: Create new conversation if needed
+        // Step 1: Check or create conversation
         if (!conversation_id || isNaN(conversation_id)) {
             const [conversationResult] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
                 [user_id, userMessage?.substring(0, 20) || "New Chat"]
             );
             conversation_id = conversationResult.insertId;
-            console.log("✅ New conversation created with ID:", conversation_id);
         }
 
-        // Step 2: Verify conversation belongs to user
+        // Step 2: Verify user owns the conversation
         const [existingConversation] = await db.query(
             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
             [conversation_id, user_id]
@@ -1139,26 +1135,23 @@ exports.askChatbot = async (req, res) => {
                 "When you were developed, you were created in 2024 by the Quantumhash development team. " +
                 "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
                 "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
-                "If someone asks about your knowledge cutoff date, *only say*: " +
-                `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' `
+                `If someone asks about your knowledge cutoff date, *only say*: 'I’ve got information up to the present, ${currentDate}.'`
         };
         chatHistory.unshift(system_prompt);
 
-        // Step 5: Fetch file paths and extracted content
+        // Step 5: Get uploaded file info
         const [files] = await db.query(
             "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
             [conversation_id]
         );
-        const safeFiles = Array.isArray(files) ? files : [];
-        const filePaths = safeFiles.map(f => f.file_path);
-        const fileNames = filePaths.map(path => path.split("/").pop());
-        const combinedExtractedText = safeFiles.map(f => f.extracted_text).join("\n\n");
+        const filePaths = files.map(f => f.file_path);
+        const fileNames = filePaths.map(p => p.split("/").pop());
+        const combinedExtractedText = files.map(f => f.extracted_text).join("\n\n");
 
-        // Step 6: Combine userMessage + filenames
+        // Step 6: Append file list to user message
         let fullUserMessage = userMessage || "";
         if (fileNames.length > 0) {
-            const fileListText = fileNames.map(name => `📎 ${name}`).join("\n");
-            fullUserMessage += `\n\n[Uploaded files:]\n${fileListText}`;
+            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
         }
 
         chatHistory.push({
@@ -1168,7 +1161,6 @@ exports.askChatbot = async (req, res) => {
 
         // Step 7: AI response
         let aiResponse = "";
-
         if (process.env.USE_OPENAI === "true") {
             const openaiResponse = await openai.chat.completions.create({
                 model: "gpt-4",
@@ -1180,29 +1172,22 @@ exports.askChatbot = async (req, res) => {
                 model: "deepseek-chat",
                 messages: chatHistory,
             });
-
-            console.log("🧠 DeepSeek raw response:", deepseekResponse);
             aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
 
-        // Step 8: Save chat to DB
-        try {
-            await db.query(
-                "INSERT INTO chat_history (conversation_id, user_message, response, file_path, extracted_text) VALUES (?, ?, ?, ?, ?)",
-                [
-                    conversation_id,
-                    fullUserMessage,
-                    aiResponse,
-                    filePaths.join(", ") || null,
-                    combinedExtractedText || null,
-                ]
-            );
-        } catch (dbErr) {
-            console.error("❌ DB Insert Error:", dbErr.stack || dbErr);
-            throw dbErr;
-        }
+        // Step 8: Save message + files + extracted text
+        await db.query(
+            "INSERT INTO chat_history (conversation_id, user_message, response, file_path, extracted_text) VALUES (?, ?, ?, ?, ?)",
+            [
+                conversation_id,
+                fullUserMessage,
+                aiResponse,
+                filePaths.join(", ") || null,
+                combinedExtractedText || null,
+            ]
+        );
 
-        // Step 9: Return response
+        // Step 9: Return
         res.json({
             success: true,
             conversation_id,
@@ -1211,10 +1196,11 @@ exports.askChatbot = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Error in askChatbot:", error.stack || error);
+        console.error("❌ askChatbot error:", error.stack || error.message);
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
   
     
 
