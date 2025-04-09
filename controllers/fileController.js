@@ -191,14 +191,23 @@ exports.uploadFiles = async (req, res) => {
           }
 
           if (ftpPath) {
-              const [fileResult] = await db.query(
-                  "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
-                  [user_id, ftpPath, extractedText || "", finalConversationId]
-              );
-
+            const [fileResult] = await db.query(
+              "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
+              [user_id, ftpPath, extractedText || "", finalConversationId]
+          );
+          
+          console.log("Database Insert Result:", fileResult); // Log the result to check
+          
+          // Check if the result is an array and handle accordingly
+          if (!Array.isArray(fileResult)) {
+              console.error("❌ Unexpected result format from DB:", fileResult);
+          } else {
               results.push({
                   file_name: originalName, // ONLY filename sent
               });
+          }
+          
+              
           }
 
           if (extractedText) {
