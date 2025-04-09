@@ -807,140 +807,274 @@ exports.getChatHistory = async (req, res) => {
 // };
 
 // AskChatbot function:
-exports.askChatbot = async (req, res) => {
-    console.log("✅ Received request at /chat:", req.body);
+    // exports.askChatbot = async (req, res) => {
+    //     console.log("✅ Received request at /chat:", req.body);
 
-    let { userMessage, conversation_id, extracted_summary } = req.body;
-    const user_id = req.user?.user_id;
+    //     let { userMessage, conversation_id, extracted_summary } = req.body;
+    //     const user_id = req.user?.user_id;
 
-    if (!user_id) {
-        console.log("❌ User ID not found in request.");
-        return res.status(401).json({ error: "Unauthorized: User ID not found." });
-    }
+    //     if (!user_id) {
+    //         console.log("❌ User ID not found in request.");
+    //         return res.status(401).json({ error: "Unauthorized: User ID not found." });
+    //     }
 
-    if (!userMessage && !extracted_summary) {
-        return res.status(400).json({ error: "User message or extracted summary is required" });
-    }
+    //     if (!userMessage && !extracted_summary) {
+    //         return res.status(400).json({ error: "User message or extracted summary is required" });
+    //     }
 
-    try {
-        console.log(`🔹 User ID: ${user_id}, Conversation ID: ${conversation_id}`);
+    //     try {
+    //         console.log(`🔹 User ID: ${user_id}, Conversation ID: ${conversation_id}`);
 
-        // Step 1: Check if conversation exists or create a new one
-        if (!conversation_id || isNaN(conversation_id)) {
-            const [conversationResult] = await db.query(
-                "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-                [user_id, userMessage?.substring(0, 20) || "New Chat"]
+    //         // Step 1: Check if conversation exists or create a new one
+    //         if (!conversation_id || isNaN(conversation_id)) {
+    //             const [conversationResult] = await db.query(
+    //                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+    //                 [user_id, userMessage?.substring(0, 20) || "New Chat"]
+    //             );
+    //             conversation_id = conversationResult.insertId;
+    //             console.log("✅ New conversation created with ID:", conversation_id);
+    //         }
+
+    //         // Step 2: Ensure conversation belongs to the user
+    //         const [existingConversation] = await db.query(
+    //             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+    //             [conversation_id, user_id]
+    //         );
+    //         if (!existingConversation || existingConversation.length === 0) {
+    //             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
+    //         }
+
+    //         // Step 3: Fetch last 5 messages
+    //         const [historyResultsRaw] = await db.query(
+    //             "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
+    //             [conversation_id]
+    //         );
+    //         const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
+
+    //         const chatHistory = historyResults
+    //             .map((chat) => [
+    //                 { role: "user", content: chat.message },
+    //                 { role: "assistant", content: chat.response },
+    //             ])
+    //             .flat()
+    //             .filter(m => m?.content); // Filter out empty or undefined messages
+
+    //         // ✅ Insert system prompt with today's date
+    //         const currentDate = new Date().toLocaleDateString('en-US', {
+    //             year: 'numeric', month: 'long', day: 'numeric'
+    //         });
+
+    //         const system_prompt = {
+    //             role: "system",
+    //             content:
+    //                 "You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
+    //                 "When you were developed, you were created in 2024 by the Quantumhash development team. " +
+                    
+    //                 "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+    //                 "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+    //                 "If someone asks about your knowledge cutoff date, *only say*: " +
+    //                 `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' ` 
+                    
+    //         };
+    //         chatHistory.unshift(system_prompt);
+
+    //         // Step 4: Fetch uploaded file contents
+    //         const [files] = await db.query(
+    //             "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
+    //             [conversation_id]
+    //         );
+    //         const safeFiles = Array.isArray(files) ? files : [];
+    //         const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
+    //         const fileNames = safeFiles.map(f => f.file_path.split("/").pop());
+
+    //         // Step 5: Combine user message + extracted file text
+    //         let fullUserMessage = userMessage || "";
+    //         if (extracted_summary) {
+    //             fullUserMessage += `\n\n[Here is some content from uploaded files that might help:]\n${extracted_summary}`;
+    //         }
+    //         if (combinedFileText) {
+    //             fullUserMessage += `\n\n[File contents:]\n${combinedFileText}`;
+    //         }
+
+    //         chatHistory.push({
+    //             role: "user",
+    //             content: fullUserMessage,
+    //         });
+
+    //         // Step 6: AI API selection
+    //         let aiResponse = "";
+
+    //         if (process.env.USE_OPENAI === "true") {
+    //             const openaiResponse = await openai.chat.completions.create({
+    //                 model: "gpt-4",
+    //                 messages: chatHistory,
+    //             });
+    //             aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+    //         } else {
+    //             const deepseekResponse = await deepseek.chat.completions.create({
+    //                 model: "deepseek-chat",
+    //                 messages: chatHistory,
+    //             });
+
+    //             console.log("🧠 DeepSeek raw response:", deepseekResponse);
+
+    //             aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+    //         }
+
+    //         // Step 7: Save chat
+    //         await db.query(
+    //             "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
+    //             [conversation_id, fullUserMessage, aiResponse]
+    //         );
+
+    //         // Step 8: Return to client
+    //         res.json({
+    //             success: true,
+    //             conversation_id,
+    //             response: aiResponse,
+    //             uploaded_files: fileNames,
+    //         });
+
+    //     } catch (error) {
+    //         console.error("❌ Error in askChatbot:", error);
+    //         res.status(500).json({ error: "Internal server error", details: error.message });
+    //     }
+    // };
+
+    exports.askChatbot = async (req, res) => {
+        console.log("✅ Received request at /chat:", req.body);
+    
+        let { userMessage, conversation_id, extracted_summary } = req.body;
+        const user_id = req.user?.user_id;
+    
+        if (!user_id) {
+            console.log("❌ User ID not found in request.");
+            return res.status(401).json({ error: "Unauthorized: User ID not found." });
+        }
+    
+        if (!userMessage && !extracted_summary) {
+            return res.status(400).json({ error: "User message or extracted summary is required" });
+        }
+    
+        try {
+            console.log(`🔹 User ID: ${user_id}, Conversation ID: ${conversation_id}`);
+    
+            // Step 1: Check if conversation exists or create a new one
+            if (!conversation_id || isNaN(conversation_id)) {
+                const [conversationResult] = await db.query(
+                    "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+                    [user_id, userMessage?.substring(0, 20) || "New Chat"]
+                );
+                conversation_id = conversationResult.insertId;
+                console.log("✅ New conversation created with ID:", conversation_id);
+            }
+    
+            // Step 2: Ensure conversation belongs to the user
+            const [existingConversation] = await db.query(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                [conversation_id, user_id]
             );
-            conversation_id = conversationResult.insertId;
-            console.log("✅ New conversation created with ID:", conversation_id);
-        }
-
-        // Step 2: Ensure conversation belongs to the user
-        const [existingConversation] = await db.query(
-            "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
-            [conversation_id, user_id]
-        );
-        if (!existingConversation || existingConversation.length === 0) {
-            return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
-        }
-
-        // Step 3: Fetch last 5 messages
-        const [historyResultsRaw] = await db.query(
-            "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
-            [conversation_id]
-        );
-        const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
-
-        const chatHistory = historyResults
-            .map((chat) => [
-                { role: "user", content: chat.message },
-                { role: "assistant", content: chat.response },
-            ])
-            .flat()
-            .filter(m => m?.content); // Filter out empty or undefined messages
-
-        // ✅ Insert system prompt with today's date
-        const currentDate = new Date().toLocaleDateString('en-US', {
-            year: 'numeric', month: 'long', day: 'numeric'
-        });
-
-        const system_prompt = {
-            role: "system",
-            content:
-                "You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
-                "When you were developed, you were created in 2024 by the Quantumhash development team. " +
-                "Always answer *directly* and *briefly* without any additional thinking or reasoning steps. " +
-                "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
-                "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
-                "If someone asks about your knowledge cutoff date, *only say*: " +
-                `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' ` 
-                
-        };
-        chatHistory.unshift(system_prompt);
-
-        // Step 4: Fetch uploaded file contents
-        const [files] = await db.query(
-            "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
-            [conversation_id]
-        );
-        const safeFiles = Array.isArray(files) ? files : [];
-        const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
-        const fileNames = safeFiles.map(f => f.file_path.split("/").pop());
-
-        // Step 5: Combine user message + extracted file text
-        let fullUserMessage = userMessage || "";
-        if (extracted_summary) {
-            fullUserMessage += `\n\n[Here is some content from uploaded files that might help:]\n${extracted_summary}`;
-        }
-        if (combinedFileText) {
-            fullUserMessage += `\n\n[File contents:]\n${combinedFileText}`;
-        }
-
-        chatHistory.push({
-            role: "user",
-            content: fullUserMessage,
-        });
-
-        // Step 6: AI API selection
-        let aiResponse = "";
-
-        if (process.env.USE_OPENAI === "true") {
-            const openaiResponse = await openai.chat.completions.create({
-                model: "gpt-4",
-                messages: chatHistory,
+            if (!existingConversation || existingConversation.length === 0) {
+                return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
+            }
+    
+            // Step 3: Fetch last 5 messages
+            const [historyResultsRaw] = await db.query(
+                "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
+                [conversation_id]
+            );
+            const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
+    
+            const chatHistory = historyResults
+                .map((chat) => [
+                    { role: "user", content: chat.message },
+                    { role: "assistant", content: chat.response },
+                ])
+                .flat()
+                .filter(m => m?.content); // Filter out empty or undefined messages
+    
+            // ✅ Insert system prompt with today's date
+            const currentDate = new Date().toLocaleDateString('en-US', {
+                year: 'numeric', month: 'long', day: 'numeric'
             });
-            aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
-        } else {
-            const deepseekResponse = await deepseek.chat.completions.create({
-                model: "deepseek-chat",
-                messages: chatHistory,
+    
+            const system_prompt = {
+                role: "system",
+                content:
+                    "You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
+                    "When you were developed, you were created in 2024 by the Quantumhash development team. " +
+                    
+                    "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+                    "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+                    "If someone asks about your knowledge cutoff date, *only say*: " +
+                    `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' ` 
+            };
+            chatHistory.unshift(system_prompt);
+    
+            // Step 4: Fetch uploaded file contents
+            const [files] = await db.query(
+                "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
+                [conversation_id]
+            );
+            const safeFiles = Array.isArray(files) ? files : [];
+            const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
+            const fileNames = safeFiles.map(f => f.file_path.split("/").pop());
+    
+            // Step 5: Combine user message + extracted file text
+            let fullUserMessage = userMessage || "";
+    
+            if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
+                fullUserMessage += `\n\n[Here is some content from uploaded files that might help:]\n${extracted_summary}`;
+            }
+    
+            if (combinedFileText) {
+                fullUserMessage += `\n\n[File contents:]\n${combinedFileText}`;
+            }
+    
+            chatHistory.push({
+                role: "user",
+                content: fullUserMessage,
             });
-
-            console.log("🧠 DeepSeek raw response:", deepseekResponse);
-
-            aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+    
+            // Step 6: AI API selection
+            let aiResponse = "";
+    
+            if (process.env.USE_OPENAI === "true") {
+                const openaiResponse = await openai.chat.completions.create({
+                    model: "gpt-4",
+                    messages: chatHistory,
+                });
+                aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+            } else {
+                const deepseekResponse = await deepseek.chat.completions.create({
+                    model: "deepseek-chat",
+                    messages: chatHistory,
+                });
+    
+                console.log("🧠 DeepSeek raw response:", deepseekResponse);
+    
+                aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+            }
+    
+            // Step 7: Save chat
+            await db.query(
+                "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
+                [conversation_id, fullUserMessage, aiResponse]
+            );
+    
+            // Step 8: Return to client
+            res.json({
+                success: true,
+                conversation_id,
+                response: aiResponse,
+                uploaded_files: fileNames,
+            });
+    
+        } catch (error) {
+            console.error("❌ Error in askChatbot:", error);
+            res.status(500).json({ error: "Internal server error", details: error.message });
         }
-
-        // Step 7: Save chat
-        await db.query(
-            "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
-            [conversation_id, fullUserMessage, aiResponse]
-        );
-
-        // Step 8: Return to client
-        res.json({
-            success: true,
-            conversation_id,
-            response: aiResponse,
-            uploaded_files: fileNames,
-        });
-
-    } catch (error) {
-        console.error("❌ Error in askChatbot:", error);
-        res.status(500).json({ error: "Internal server error", details: error.message });
-    }
-};
-
-
+    };
+    
 
 
