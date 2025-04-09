@@ -519,6 +519,7 @@ if (extracted_summary) {
         let fullUserMessage = userMessage || "";
         if (fileNames.length > 0) {
             fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
+            filePaths = fileNames.map(name => `/fileuploads/files/${name}`);  // Include file paths
         }
 
         // Step 7: Add fullUserMessage to chat history
@@ -554,8 +555,8 @@ if (extracted_summary) {
         console.log("AI Response:", aiResponse);
         // Step 9: Save to DB with extracted_summary
         await db.query(
-            "INSERT INTO chat_history (conversation_id, user_message, response, extracted_text) VALUES (?, ?, ?, ?)",
-            [conversation_id, fullUserMessage, aiResponse, extracted_summary || null]
+            "INSERT INTO chat_history (conversation_id, user_message, response, extracted_text, file_path) VALUES (?, ?, ?, ?)",
+            [conversation_id, fullUserMessage, aiResponse, extracted_summary || null, filePaths.join(",")]
         );
 
         // Step 10: Return response
