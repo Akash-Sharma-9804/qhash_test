@@ -1007,7 +1007,7 @@ exports.getChatHistory = async (req, res) => {
                     "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
                     "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
                     "If someone asks about your knowledge cutoff date, *only say*: " +
-                    `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' ` 
+                    `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' `
             };
             chatHistory.unshift(system_prompt);
     
@@ -1067,7 +1067,7 @@ exports.getChatHistory = async (req, res) => {
                 success: true,
                 conversation_id,
                 response: aiResponse,
-                uploaded_files: fileNames,
+                uploaded_files: fileNames, // ✅ Only file names, not full paths
             });
     
         } catch (error) {
@@ -1075,6 +1075,7 @@ exports.getChatHistory = async (req, res) => {
             res.status(500).json({ error: "Internal server error", details: error.message });
         }
     };
+    
     
 
 
