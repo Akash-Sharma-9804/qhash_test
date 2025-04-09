@@ -658,7 +658,7 @@ exports.askChatbot = async (req, res) => {
         let filePaths = [];
         if (fileNames.length > 0) {
             fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
-            filePaths = fileNames.map(name => `/fileuploads/files/${name}`);  // Include file paths
+            filePaths = fileNames.map(name => `/Quantum_AI/uploads/${name}`);  // Include file paths
         }
 
         console.log("Full User Message (with filenames only):", fullUserMessage);
