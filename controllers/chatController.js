@@ -507,7 +507,7 @@ let fileNames = [];
 
 if (extracted_summary) {
     const [files] = await db.query(
-        "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY created_at DESC",
+        "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
         [conversation_id]
     );
     if (Array.isArray(files) && files.length > 0) {
