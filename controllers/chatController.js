@@ -534,7 +534,8 @@ if (extracted_summary) {
                 content: `[Here is a summary of the uploaded file content:]\n${extracted_summary}`
             });
         }
-
+        console.log("Full User Message:", fullUserMessage);
+      
         // Step 8: AI API
         let aiResponse = "";
         if (process.env.USE_OPENAI === "true") {
@@ -550,7 +551,7 @@ if (extracted_summary) {
             });
             aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
-
+        console.log("AI Response:", aiResponse);
         // Step 9: Save to DB with extracted_summary
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response, extracted_text) VALUES (?, ?, ?, ?)",
