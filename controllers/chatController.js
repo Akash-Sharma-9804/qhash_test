@@ -1010,64 +1010,68 @@ exports.getChatHistory = async (req, res) => {
         };
         chatHistory.unshift(system_prompt);
 
-        // Step 4: Fetch uploaded file contents
-        const [files] = await db.query(
-            "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
-            [conversation_id]
-        );
-        const safeFiles = Array.isArray(files) ? files : [];
-        const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
-        const fileNames = safeFiles.map(f => f.file_path.split("/").pop());
+      // Step 4: Fetch uploaded file contents
+const [files] = await db.query(
+    "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
+    [conversation_id]
+);
+const safeFiles = Array.isArray(files) ? files : [];
+const fileNames = safeFiles.map(f => f.file_path.split("/").pop());
+const filePaths = safeFiles.map(f => f.file_path); // Needed for DB save later
+const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
 
-        // Step 5: Combine user message + extracted file text
-        let fullUserMessage = userMessage || "";
+// Step 5: Combine user message + uploaded filenames only
+let fullUserMessage = userMessage || "";
 
-        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
-            fullUserMessage += `\n\n[Here is some content from uploaded files that might help:]\n${extracted_summary}`;
-        }
+if (fileNames.length > 0) {
+    fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
+}
 
-        if (combinedFileText) {
-            fullUserMessage += `\n\n[File contents:]\n${combinedFileText}`;
-        }
+chatHistory.push({
+    role: "user",
+    content: fullUserMessage,
+});
 
-        chatHistory.push({
-            role: "user",
-            content: fullUserMessage,
-        });
 
-        // Step 6: AI API selection
-        let aiResponse = "";
+       // Step 6: AI API selection
+let aiResponse = "";
 
-        if (process.env.USE_OPENAI === "true") {
-            const openaiResponse = await openai.chat.completions.create({
-                model: "gpt-4",
-                messages: chatHistory,
-            });
-            aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
-        } else {
-            const deepseekResponse = await deepseek.chat.completions.create({
-                model: "deepseek-chat",
-                messages: chatHistory,
-            });
+if (process.env.USE_OPENAI === "true") {
+    const openaiResponse = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: chatHistory,
+    });
+    aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+} else {
+    const deepseekResponse = await deepseek.chat.completions.create({
+        model: "deepseek-chat",
+        messages: chatHistory,
+    });
 
-            console.log("🧠 DeepSeek raw response:", deepseekResponse);
+    console.log("🧠 DeepSeek raw response:", deepseekResponse);
 
-            aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
-        }
+    aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+}
 
-        // Step 7: Save chat
-        await db.query(
-            "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
-            [conversation_id, fullUserMessage, aiResponse]
-        );
+// Step 7: Save chat
+await db.query(
+    "INSERT INTO chat_history (conversation_id, user_message, response, extracted_text) VALUES (?, ?, ?, ?)",
+    [
+        conversation_id,
+        fullUserMessage,
+        aiResponse,
+        combinedFileText || null,
+    ]
+);
 
-        // Step 8: Return to client
-        res.json({
-            success: true,
-            conversation_id,
-            response: aiResponse,
-            uploaded_files: fileNames, // ✅ Only file names, not full paths
-        });
+// Step 8: Return to client
+res.json({
+    success: true,
+    conversation_id,
+    response: aiResponse,
+    uploaded_files: fileNames, // ✅ Only file names, not full paths
+});
+
 
     } catch (error) {
         console.error("❌ Error in askChatbot:", error);
