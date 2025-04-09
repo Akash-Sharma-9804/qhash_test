@@ -515,11 +515,19 @@ exports.askChatbot = async (req, res) => {
             fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
         }
 
-        // Step 7: Add to chat history
+        // Step 7: Add fullUserMessage to chat history
         chatHistory.push({
             role: "user",
             content: fullUserMessage,
         });
+
+        // Step 7.5: Add extracted summary for AI context only (NOT shown in UI)
+        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
+            chatHistory.push({
+                role: "user",
+                content: `[Here is a summary of the uploaded file content:]\n${extracted_summary}`
+            });
+        }
 
         // Step 8: AI API
         let aiResponse = "";
@@ -556,6 +564,7 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
   
     
