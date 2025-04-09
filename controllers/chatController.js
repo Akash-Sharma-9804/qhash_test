@@ -1140,20 +1140,25 @@ exports.askChatbot = async (req, res) => {
         chatHistory.unshift(system_prompt);
 
         // Step 5: Get uploaded file info
-        const [files] = await db.query(
+        const [rawFiles] = await db.query(
             "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
             [conversation_id]
         );
-        const filePaths = files.map(f => f.file_path);
-        const fileNames = filePaths.map(p => p.split("/").pop());
-        const combinedExtractedText = files.map(f => f.extracted_text).join("\n\n");
+        const files = Array.isArray(rawFiles) ? rawFiles : [];
 
-        // Step 6: Append file list to user message
-let fullUserMessage = userMessage || "";
-if (fileNames.length > 0) {
-    const fileListText = fileNames.map(name => `📎 ${name}`).join("\n");
-    fullUserMessage += `\n\n[Uploaded files:]\n${fileListText}`;
-}
+        let filePaths = [], fileNames = [], combinedExtractedText = "";
+
+        if (files.length > 0) {
+            filePaths = files.map(f => f.file_path);
+            fileNames = filePaths.map(p => p.split("/").pop());
+            combinedExtractedText = files.map(f => f.extracted_text).join("\n\n");
+        }
+
+        // Step 6: Append file names to user message (only names, not extracted content)
+        let fullUserMessage = userMessage || "";
+        if (fileNames.length > 0) {
+            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
+        }
 
         chatHistory.push({
             role: "user",
@@ -1176,19 +1181,19 @@ if (fileNames.length > 0) {
             aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
 
-        // Step 8: Save message + files + extracted text
-await db.query(
-    "INSERT INTO chat_history (conversation_id, user_message, response, file_path, extracted_text) VALUES (?, ?, ?, ?, ?)",
-    [
-        conversation_id,
-        fullUserMessage,
-        aiResponse,
-        filePaths.join(", ") || null,
-        combinedExtractedText || null,
-    ]
-);
+        // Step 8: Save message + file path + extracted text
+        await db.query(
+            "INSERT INTO chat_history (conversation_id, user_message, response, file_path, extracted_text) VALUES (?, ?, ?, ?, ?)",
+            [
+                conversation_id,
+                fullUserMessage,
+                aiResponse,
+                filePaths.join(", ") || null,
+                combinedExtractedText || null,
+            ]
+        );
 
-        // Step 9: Return
+        // Step 9: Return response
         res.json({
             success: true,
             conversation_id,
@@ -1201,6 +1206,7 @@ await db.query(
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
   
     
