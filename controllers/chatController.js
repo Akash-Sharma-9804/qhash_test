@@ -517,11 +517,13 @@ if (extracted_summary) {
 
         // Step 6: Construct full user message (userMessage + filenames)
         let fullUserMessage = userMessage || "";
+        let filePaths = [];
         if (fileNames.length > 0) {
             fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
             filePaths = fileNames.map(name => `/fileuploads/files/${name}`);  // Include file paths
         }
-
+        console.log("Full User Message (with filenames only):", fullUserMessage);
+        console.log("File Paths (for DB insertion):", filePaths);
         // Step 7: Add fullUserMessage to chat history
         chatHistory.push({
             role: "user",
