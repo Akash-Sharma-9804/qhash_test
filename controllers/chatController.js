@@ -557,7 +557,7 @@ if (extracted_summary) {
         console.log("AI Response:", aiResponse);
         // Step 9: Save to DB with extracted_summary
         await db.query(
-            "INSERT INTO chat_history (convo_id, user_msg, response, created_at, filepath, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
+            "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
             [conversation_id, fullUserMessage, aiResponse, filePaths.join(","), extracted_summary || null]
         );
 
