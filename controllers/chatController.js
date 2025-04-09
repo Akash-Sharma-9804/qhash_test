@@ -944,7 +944,7 @@ exports.getChatHistory = async (req, res) => {
     exports.askChatbot = async (req, res) => {
         console.log("✅ Received request at /chat:", req.body);
     
-        let { userMessage, conversation_id, extracted_summary } = req.body;
+        let { userMessage, conversation_id } = req.body;
         const user_id = req.user?.user_id;
     
         if (!user_id) {
@@ -952,7 +952,7 @@ exports.getChatHistory = async (req, res) => {
             return res.status(401).json({ error: "Unauthorized: User ID not found." });
         }
     
-        if (!userMessage && !extracted_summary) {
+        if (!userMessage && !req.body.extracted_summary) {
             return res.status(400).json({ error: "User message or extracted summary is required" });
         }
     
@@ -986,14 +986,14 @@ exports.getChatHistory = async (req, res) => {
             const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
     
             const chatHistory = historyResults
-                .map((chat) => [
+                .map(chat => [
                     { role: "user", content: chat.message },
-                    { role: "assistant", content: chat.response },
+                    { role: "assistant", content: chat.response }
                 ])
                 .flat()
                 .filter(m => m?.content); // Filter out empty or undefined messages
     
-            // ✅ Insert system prompt with today's date
+            // System prompt
             const currentDate = new Date().toLocaleDateString('en-US', {
                 year: 'numeric', month: 'long', day: 'numeric'
             });
@@ -1008,57 +1008,57 @@ exports.getChatHistory = async (req, res) => {
                     "If someone asks about your knowledge cutoff date, *only say*: " +
                     `'I don’t have a strict knowledge cutoff date. My knowledge is continuously updated, so I’ve got information all the way up to the present, ${currentDate}.' `
             };
+    
             chatHistory.unshift(system_prompt);
     
-            // Step 4: Fetch uploaded file contents
+            // Step 4: Get uploaded file paths and extracted text
             const [files] = await db.query(
                 "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ?",
                 [conversation_id]
             );
-            const safeFiles = Array.isArray(files) ? files : [];
-            const combinedFileText = safeFiles.map(f => f.extracted_text).join("\n\n") || "";
-            const fileNames = safeFiles.map(f => f.file_path.split("/").pop());
     
-            // Step 5: Combine user message + extracted file text
+            const filePaths = files.map(f => f.file_path); // full paths
+            const fileNames = filePaths.map(p => p.split("/").pop()); // only names
+            const combinedExtractedText = files.map(f => f.extracted_text).join("\n\n");
+    
+            // Step 5: Format full user message with filenames
             let fullUserMessage = userMessage || "";
     
-            if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
-                fullUserMessage += `\n\n[Here is some content from uploaded files that might help:]\n${extracted_summary}`;
+            if (fileNames.length > 0) {
+                const fileListText = fileNames.map(name => `📎 ${name}`).join("\n");
+                fullUserMessage += `\n\n[Uploaded files:]\n${fileListText}`;
             }
     
-            if (combinedFileText) {
-                fullUserMessage += `\n\n[File contents:]\n${combinedFileText}`;
-            }
+            chatHistory.push({ role: "user", content: fullUserMessage });
     
-            chatHistory.push({
-                role: "user",
-                content: fullUserMessage,
-            });
-    
-            // Step 6: AI API selection
+            // Step 6: AI processing
             let aiResponse = "";
-    
             if (process.env.USE_OPENAI === "true") {
                 const openaiResponse = await openai.chat.completions.create({
                     model: "gpt-4",
-                    messages: chatHistory,
+                    messages: chatHistory
                 });
                 aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
             } else {
                 const deepseekResponse = await deepseek.chat.completions.create({
                     model: "deepseek-chat",
-                    messages: chatHistory,
+                    messages: chatHistory
                 });
     
                 console.log("🧠 DeepSeek raw response:", deepseekResponse);
-    
                 aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
             }
     
-            // Step 7: Save chat
+            // Step 7: Save chat into chat_history with file_path and extracted_text
             await db.query(
-                "INSERT INTO chat_history (conversation_id, user_message, response) VALUES (?, ?, ?)",
-                [conversation_id, fullUserMessage, aiResponse]
+                "INSERT INTO chat_history (conversation_id, user_message, response, file_path, extracted_text) VALUES (?, ?, ?, ?, ?)",
+                [
+                    conversation_id,
+                    fullUserMessage,
+                    aiResponse,
+                    filePaths.join(", "),          // full paths
+                    combinedExtractedText || null  // extracted content
+                ]
             );
     
             // Step 8: Return to client
@@ -1066,7 +1066,7 @@ exports.getChatHistory = async (req, res) => {
                 success: true,
                 conversation_id,
                 response: aiResponse,
-                uploaded_files: fileNames, // ✅ Only file names, not full paths
+                uploaded_files: fileNames
             });
     
         } catch (error) {
@@ -1074,6 +1074,7 @@ exports.getChatHistory = async (req, res) => {
             res.status(500).json({ error: "Internal server error", details: error.message });
         }
     };
+    
     
     
     
