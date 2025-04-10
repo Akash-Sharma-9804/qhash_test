@@ -149,66 +149,63 @@ const extractText = async (buffer, mimeType) => {
           console.log("🧪 Parsed PDF content length:", initialText.length);
           console.log("📄 Total pages (pdf-parse):", parsed.numpages);
 
-          // If text is short or only one page, fall back to OCR
+          const pdfDoc = await PDFDocument.load(buffer);
+          const totalPages = pdfDoc.getPageCount();
+
+          // OCR fallback for scanned/short PDFs
           if (!initialText || parsed.numpages <= 1 || initialText.length < 100) {
-              console.log("🔁 Falling back to OCR (pdf2pic + Tesseract)...");
+              console.log("🔁 Falling back to OCR (per page via pdf2pic + Tesseract)...");
 
               const tmpFile = await tmp.file({ postfix: ".pdf" });
               await fs.writeFile(tmpFile.path, buffer);
 
-              const pdfDoc = await PDFDocument.load(buffer);
-              const totalPages = pdfDoc.getPageCount();
-
-              const pdf2picConverter = fromPath(tmpFile.path, {
-                  density: 150,
-                  format: "png",
-                  width: 1200,
-                  height: 1600,
-                  saveFilename: "ocr_page",
-                  savePath: "/tmp",
-              });
-
               let ocrTextByPage = [];
 
               for (let i = 1; i <= totalPages; i++) {
+                  const converter = fromPath(tmpFile.path, {
+                      density: 150,
+                      format: "png",
+                      width: 1200,
+                      height: 1600,
+                      saveFilename: `ocr_page_${i}_${Date.now()}`, // ✅ unique file per page
+                      savePath: "/tmp",
+                  });
+
                   try {
-                      const pageImage = await pdf2picConverter(i);
+                      const pageImage = await converter(i);
                       const { data } = await Tesseract.recognize(pageImage.path, "eng", {
                           logger: m => console.log(`📄 OCR Progress (Page ${i}):`, m.progress),
                       });
 
-                      const pageText = data.text.trim();
-                      ocrTextByPage.push(`\n--- Page ${i} ---\n${pageText || "[No text found on this page]"}`);
+                      const text = data.text.trim();
+                      ocrTextByPage.push(`\n--- Page ${i} ---\n${text || "[No text found]"}`);
                   } catch (err) {
                       console.error(`❌ OCR failed on page ${i}:`, err.message);
                       ocrTextByPage.push(`\n--- Page ${i} ---\n[OCR failed: ${err.message}]`);
                   }
               }
 
-              const fullOcrText = ocrTextByPage.join("\n");
-              console.log("🧠 Full OCR Extracted Text Length:", fullOcrText.length);
-              return fullOcrText.trim();
+              const fullText = ocrTextByPage.join("\n");
+              console.log("✅ OCR completed, total text length:", fullText.length);
+              return fullText.trim();
           }
 
-          // Otherwise, use pdf-parse page-by-page split
-          const pdfDoc = await PDFDocument.load(buffer);
-          const totalPages = pdfDoc.getPageCount();
-
+          // Otherwise use high-quality pdf-parse per page
           let fullTextByPage = [];
 
           for (let i = 0; i < totalPages; i++) {
               const singlePagePdf = await PDFDocument.create();
               const [copiedPage] = await singlePagePdf.copyPages(pdfDoc, [i]);
               singlePagePdf.addPage(copiedPage);
-              const singlePageBytes = await singlePagePdf.save();
-              const pageParsed = await pdf(singlePageBytes);
+              const pageBuffer = await singlePagePdf.save();
+              const pageParsed = await pdf(pageBuffer);
 
               fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageParsed.text.trim()}`);
           }
 
-          const finalExtracted = fullTextByPage.join("\n");
-          console.log("✅ Full extracted text length from pdf-parse:", finalExtracted.length);
-          return finalExtracted.trim();
+          const fullText = fullTextByPage.join("\n");
+          console.log("✅ Parsed multi-page PDF text length:", fullText.length);
+          return fullText.trim();
 
       } else if (mimeType === "text/plain") {
           return buffer.toString("utf8");
@@ -231,6 +228,7 @@ const extractText = async (buffer, mimeType) => {
       return null;
   }
 };
+
 
 
 
