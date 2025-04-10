@@ -268,6 +268,8 @@ exports.uploadFiles = async (req, res) => {
 
             try {
                 extractedText = await extractText(buffer, file.mimetype);
+                console.log("🧾 Final extracted text:\n", extractedText?.slice(0, 1000));
+
             } catch (err) {
                 console.error("❌ Failed to extract text:", err.message);
             }
