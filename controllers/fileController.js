@@ -138,7 +138,7 @@ const { PDFDocument } = require("pdf-lib");
 const db = require("../config/db");
 const uploadToFTP = require("../utils/ftpUploader");
 
-// 📄 Extract text from various file types
+// 🧠 Full enhanced extractor
 const extractText = async (buffer, mimeType) => {
     try {
         if (mimeType === "application/pdf") {
@@ -155,7 +155,6 @@ const extractText = async (buffer, mimeType) => {
 
             if (useOCR) {
                 console.log("🔁 Falling back to OCR for all pages...");
-
                 const tmpFile = await tmp.file({ postfix: ".pdf" });
                 await fs.writeFile(tmpFile.path, buffer);
 
@@ -181,20 +180,17 @@ const extractText = async (buffer, mimeType) => {
                     }
                 }
 
-                // Clean up tmp file
                 await tmpFile.cleanup?.();
-
             } else {
-                console.log("⚡ Extracting all pages using pdf-parse + pdf-lib...");
+                console.log("⚡ Extracting all pages using pdf-lib + pdf-parse...");
+                const allPages = await pdfDoc.copyPages(pdfDoc, [...Array(totalPages).keys()]);
                 for (let i = 0; i < totalPages; i++) {
                     try {
-                        const singlePagePdf = await PDFDocument.create();
-                        const [copiedPage] = await pdfDoc.copyPages(pdfDoc, [i]);
-                        singlePagePdf.addPage(copiedPage);
-                        const pageBuffer = await singlePagePdf.save();
-                        const pageParsed = await pdf(pageBuffer);
-                        const pageText = pageParsed.text?.trim() || "[No text found]";
-                        fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageText}`);
+                        const newPdf = await PDFDocument.create();
+                        newPdf.addPage(allPages[i]);
+                        const singlePageBuffer = await newPdf.save();
+                        const singlePageText = (await pdf(singlePageBuffer)).text?.trim() || "[No text found]";
+                        fullTextByPage.push(`\n--- Page ${i + 1} ---\n${singlePageText}`);
                     } catch (err) {
                         console.error(`❌ Failed to parse page ${i + 1}:`, err.message);
                         fullTextByPage.push(`\n--- Page ${i + 1} ---\n[Parsing failed: ${err.message}]`);
@@ -230,7 +226,6 @@ const extractText = async (buffer, mimeType) => {
     }
 };
 
-
 // 📥 File upload handler
 exports.uploadFiles = async (req, res) => {
     try {
@@ -244,7 +239,6 @@ exports.uploadFiles = async (req, res) => {
         let { conversation_id } = req.body;
         let finalConversationId = conversation_id;
 
-        // 🧵 Create new conversation if needed
         if (!conversation_id) {
             const [convResult] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
