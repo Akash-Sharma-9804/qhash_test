@@ -141,21 +141,18 @@ const uploadToFTP = require("../utils/ftpUploader");
  
  
  
+ 
 
-// ✅ Final version of extractText
 const extractText = async (buffer, mimeType) => {
   try {
     if (mimeType === "application/pdf") {
       const parsed = await pdf(buffer);
-      const initialText = parsed.text?.trim() || "";
-      console.log("📄 Parsed PDF content length:", initialText.length);
-
-      const sourceDoc = await PDFDocument.load(buffer);
-      const totalPages = sourceDoc.getPageCount();
+      const rawText = parsed.text?.trim() || "";
+      const totalPages = parsed.numpages;
       console.log("📚 Total PDF pages:", totalPages);
+      console.log("📄 Parsed PDF text length:", rawText.length);
 
-      const fullTextByPage = [];
-      const useOCR = !initialText || initialText.length < 100;
+      const useOCR = !rawText || rawText.length < 100;
 
       if (useOCR) {
         console.log("🔁 Falling back to OCR for all pages...");
@@ -170,14 +167,16 @@ const extractText = async (buffer, mimeType) => {
           savePath: "/tmp",
         });
 
+        const fullTextByPage = [];
+
         for (let i = 1; i <= totalPages; i++) {
           try {
             const pageImage = await converter(i);
             const { data } = await Tesseract.recognize(pageImage.path, "eng", {
               logger: m => console.log(`📄 OCR Progress (Page ${i}):`, m.progress),
             });
-            const text = data.text?.trim() || "[No text found]";
-            fullTextByPage.push(`\n--- Page ${i} ---\n${text}`);
+            const pageText = data.text?.trim() || "[No text found]";
+            fullTextByPage.push(`\n--- Page ${i} ---\n${pageText}`);
           } catch (err) {
             console.error(`❌ OCR failed on page ${i}:`, err.message);
             fullTextByPage.push(`\n--- Page ${i} ---\n[OCR failed: ${err.message}]`);
@@ -185,27 +184,22 @@ const extractText = async (buffer, mimeType) => {
         }
 
         await tmpFile.cleanup?.();
-      } else {
-        console.log("⚡ Extracting each page using pdf-lib + pdf-parse...");
-        for (let i = 0; i < totalPages; i++) {
-          try {
-            const newDoc = await PDFDocument.create();
-            const [copiedPage] = await sourceDoc.copyPages(sourceDoc, [i]); // ✅ correct usage
-            newDoc.addPage(copiedPage);
-            const pageBuffer = await newDoc.save();
-            const pageParsed = await pdf(pageBuffer);
-            const pageText = pageParsed.text?.trim() || "[No text found]";
-            fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageText}`);
-          } catch (err) {
-            console.error(`❌ Failed to parse page ${i + 1}:`, err.message);
-            fullTextByPage.push(`\n--- Page ${i + 1} ---\n[Parsing failed: ${err.message}]`);
-          }
-        }
+        return fullTextByPage.join("\n").trim();
       }
 
-      const fullText = fullTextByPage.join("\n").trim();
-      console.log("✅ Final PDF text length:", fullText.length);
-      return fullText;
+      // 🔍 Attempt to simulate page breaks (pdf-parse doesn't do this perfectly)
+      const lines = rawText.split("\n");
+      const approxLinesPerPage = Math.ceil(lines.length / totalPages);
+      const fullTextByPage = [];
+
+      for (let i = 0; i < totalPages; i++) {
+        const pageLines = lines.slice(i * approxLinesPerPage, (i + 1) * approxLinesPerPage);
+        fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageLines.join("\n")}`);
+      }
+
+      const finalText = fullTextByPage.join("\n").trim();
+      console.log("✅ Final extracted length:", finalText.length);
+      return finalText;
     }
 
     if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
@@ -230,6 +224,7 @@ const extractText = async (buffer, mimeType) => {
     return "[Extraction failed]";
   }
 };
+
 
 
 
