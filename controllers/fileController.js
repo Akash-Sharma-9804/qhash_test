@@ -139,94 +139,96 @@ const db = require("../config/db");
 const uploadToFTP = require("../utils/ftpUploader");
 
 // 🧠 Full enhanced extractor
+ 
+
 const extractText = async (buffer, mimeType) => {
   try {
-      if (mimeType === "application/pdf") {
-          const parsed = await pdf(buffer);
-          const initialText = parsed.text?.trim() || "";
-          console.log("📄 Parsed PDF content length:", initialText.length);
+    if (mimeType === "application/pdf") {
+      const parsed = await pdf(buffer);
+      const initialText = parsed.text?.trim() || "";
+      console.log("📄 Parsed PDF content length:", initialText.length);
 
-          const pdfDoc = await PDFDocument.load(buffer);
-          const totalPages = pdfDoc.getPageCount();
-          console.log("📚 Total PDF pages:", totalPages);
+      const sourceDoc = await PDFDocument.load(buffer);
+      const totalPages = sourceDoc.getPageCount();
+      console.log("📚 Total PDF pages:", totalPages);
 
-          const fullTextByPage = [];
-          const useOCR = !initialText || initialText.length < 100;
+      const fullTextByPage = [];
+      const useOCR = !initialText || initialText.length < 100;
 
-          if (useOCR) {
-              console.log("🔁 Falling back to OCR for all pages...");
-              const tmpFile = await tmp.file({ postfix: ".pdf" });
-              await fs.writeFile(tmpFile.path, buffer);
+      if (useOCR) {
+        console.log("🔁 Falling back to OCR for all pages...");
+        const tmpFile = await tmp.file({ postfix: ".pdf" });
+        await fs.writeFile(tmpFile.path, buffer);
 
-              const converter = fromPath(tmpFile.path, {
-                  density: 150,
-                  format: "png",
-                  width: 1200,
-                  height: 1600,
-                  savePath: "/tmp",
-              });
+        const converter = fromPath(tmpFile.path, {
+          density: 150,
+          format: "png",
+          width: 1200,
+          height: 1600,
+          savePath: "/tmp",
+        });
 
-              for (let i = 1; i <= totalPages; i++) {
-                  try {
-                      const pageImage = await converter(i);
-                      const { data } = await Tesseract.recognize(pageImage.path, "eng", {
-                          logger: m => console.log(`📄 OCR Progress (Page ${i}):`, m.progress),
-                      });
-                      const text = data.text?.trim() || "[No text found]";
-                      fullTextByPage.push(`\n--- Page ${i} ---\n${text}`);
-                  } catch (err) {
-                      console.error(`❌ OCR failed on page ${i}:`, err.message);
-                      fullTextByPage.push(`\n--- Page ${i} ---\n[OCR failed: ${err.message}]`);
-                  }
-              }
-
-              await tmpFile.cleanup?.();
-          } else {
-              console.log("⚡ Extracting all pages using pdf-lib + pdf-parse...");
-
-              const copiedPages = await pdfDoc.copyPages(pdfDoc, [...Array(totalPages).keys()]);
-              for (let i = 0; i < totalPages; i++) {
-                  try {
-                      const newPdf = await PDFDocument.create();
-                      newPdf.addPage(copiedPages[i]);
-                      const singlePageBuffer = await newPdf.save();
-                      const singlePageParsed = await pdf(singlePageBuffer);
-                      const text = singlePageParsed.text?.trim() || "[No text found]";
-                      fullTextByPage.push(`\n--- Page ${i + 1} ---\n${text}`);
-                  } catch (err) {
-                      console.error(`❌ Failed to parse page ${i + 1}:`, err.message);
-                      fullTextByPage.push(`\n--- Page ${i + 1} ---\n[Parsing failed: ${err.message}]`);
-                  }
-              }
+        for (let i = 1; i <= totalPages; i++) {
+          try {
+            const pageImage = await converter(i);
+            const { data } = await Tesseract.recognize(pageImage.path, "eng", {
+              logger: m => console.log(`📄 OCR Progress (Page ${i}):`, m.progress),
+            });
+            const text = data.text?.trim() || "[No text found]";
+            fullTextByPage.push(`\n--- Page ${i} ---\n${text}`);
+          } catch (err) {
+            console.error(`❌ OCR failed on page ${i}:`, err.message);
+            fullTextByPage.push(`\n--- Page ${i} ---\n[OCR failed: ${err.message}]`);
           }
+        }
 
-          const fullText = fullTextByPage.join("\n").trim();
-          console.log("✅ Final PDF text length:", fullText.length);
-          return fullText;
+        await tmpFile.cleanup?.();
+      } else {
+        console.log("⚡ Extracting each page using pdf-lib + pdf-parse...");
+        for (let i = 0; i < totalPages; i++) {
+          try {
+            const newDoc = await PDFDocument.create();
+            const [copiedPage] = await sourceDoc.copyPages(sourceDoc, [i]);
+            newDoc.addPage(copiedPage);
+            const pageBuffer = await newDoc.save();
+            const pageParsed = await pdf(pageBuffer);
+            const pageText = pageParsed.text?.trim() || "[No text found]";
+            fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageText}`);
+          } catch (err) {
+            console.error(`❌ Failed to parse page ${i + 1}:`, err.message);
+            fullTextByPage.push(`\n--- Page ${i + 1} ---\n[Parsing failed: ${err.message}]`);
+          }
+        }
       }
 
-      if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-          const result = await mammoth.extractRawText({ buffer });
-          return result.value.trim();
-      }
+      const fullText = fullTextByPage.join("\n").trim();
+      console.log("✅ Final PDF text length:", fullText.length);
+      return fullText;
+    }
 
-      if (mimeType === "text/plain") {
-          return buffer.toString("utf8").trim();
-      }
+    if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value.trim();
+    }
 
-      if (mimeType.startsWith("image")) {
-          const { data } = await Tesseract.recognize(buffer, "eng", {
-              logger: m => console.log("🖼️ OCR progress:", m.progress),
-          });
-          return data.text?.trim() || "[No text extracted from image]";
-      }
+    if (mimeType === "text/plain") {
+      return buffer.toString("utf8").trim();
+    }
 
-      return "Unsupported file type.";
+    if (mimeType.startsWith("image")) {
+      const { data } = await Tesseract.recognize(buffer, "eng", {
+        logger: m => console.log("🖼️ OCR progress:", m.progress),
+      });
+      return data.text?.trim() || "[No text extracted from image]";
+    }
+
+    return "Unsupported file type.";
   } catch (err) {
-      console.error("❌ extractText crashed:", err.message);
-      return "[Extraction failed]";
+    console.error("❌ extractText crashed:", err.message);
+    return "[Extraction failed]";
   }
 };
+
 
 
 // 📥 File upload handler
