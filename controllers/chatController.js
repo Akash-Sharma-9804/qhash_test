@@ -325,7 +325,7 @@ exports.askChatbot = async (req, res) => {
     }
 
     try {
-        // Step 1: Create conversation if not exists
+        // Step 1: Create new conversation if needed
         if (!conversation_id || isNaN(conversation_id)) {
             const [conversationResult] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
@@ -334,87 +334,101 @@ exports.askChatbot = async (req, res) => {
             conversation_id = conversationResult.insertId;
         }
 
-        // Step 2: Check ownership
-        const [conversationCheck] = await db.query(
+        // Step 2: Check conversation ownership
+        const [conversationRows] = await db.query(
             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
             [conversation_id, user_id]
         );
-        if (!Array.isArray(conversationCheck) || conversationCheck.length === 0) {
+
+        if (!Array.isArray(conversationRows) || conversationRows.length === 0) {
             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
         }
 
-        // Step 3: Fetch previous chat history
-        const [historyRaw] = await db.query(
+        // Step 3: Fetch last 5 chat history
+        const [historyRows] = await db.query(
             "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
             [conversation_id]
         );
-        const chatHistory = (Array.isArray(historyRaw) ? historyRaw : [])
-            .map(chat => [
+
+        const chatHistory = Array.isArray(historyRows)
+            ? historyRows.flatMap(chat => [
                 { role: "user", content: chat.message },
                 { role: "assistant", content: chat.response },
-            ])
-            .flat()
-            .filter(msg => msg?.content);
+            ]).filter(m => m?.content)
+            : [];
 
         // Step 4: Add system prompt
         const currentDate = new Date().toLocaleDateString('en-US', {
             year: 'numeric', month: 'long', day: 'numeric'
         });
-        chatHistory.unshift({
-            role: "system",
-            content: `You are Quantumhash, an AI assistant developed by the Quantumhash development team in 2024. If someone asks your name, say: "My name is Quantumhash AI." Knowledge cutoff: ${currentDate}.`
-        });
 
-        // Step 5: Get uploaded file names
+        const systemPrompt = {
+            role: "system",
+            content:
+                "You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
+                "When you were developed, you were created in 2024 by the Quantumhash development team. " +
+                "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+                "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+                `If someone asks about your knowledge cutoff date, *only say*: 'I’ve got information up to the present, ${currentDate}.'`
+        };
+        chatHistory.unshift(systemPrompt);
+
+        // Step 5: Get uploaded files for this conversation
         let fileNames = [];
         let filePaths = [];
+
         if (extracted_summary) {
-            const [fileRows] = await db.query(
+            const [uploadedFiles] = await db.query(
                 "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
                 [conversation_id]
             );
-            fileNames = fileRows.map(row => row.file_path?.split("/").pop());
-            filePaths = fileRows.map(row => row.file_path);
+
+            if (Array.isArray(uploadedFiles)) {
+                fileNames = uploadedFiles.map(f => f.file_path.split("/").pop());
+                filePaths = uploadedFiles.map(f => f.file_path);
+            }
         }
 
         // Step 6: Append filenames to user message
         let fullUserMessage = userMessage || "";
         if (fileNames.length > 0) {
-            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(f => `📎 ${f}`).join("\n")}`;
+            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
         }
 
-        // Step 7: Add to AI history
+        // Step 7: Add full user message to chat history
         chatHistory.push({ role: "user", content: fullUserMessage });
 
-        if (extracted_summary && extracted_summary.trim() !== "No readable content") {
+        // Step 8: Add extracted summary (if any)
+        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
             chatHistory.push({
                 role: "user",
-                content: `[Summary of uploaded content:]\n${extracted_summary}`
+                content: `[Here is a summary of the uploaded file content:]\n${extracted_summary}`
             });
         }
 
-        // Step 8: Send to AI
+        // Step 9: Get AI response
         let aiResponse = "";
         if (process.env.USE_OPENAI === "true") {
             const openaiResponse = await openai.chat.completions.create({
                 model: "gpt-4",
                 messages: chatHistory,
             });
-            aiResponse = openaiResponse.choices?.[0]?.message?.content || "AI did not return a valid response.";
+            aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         } else {
             const deepseekResponse = await deepseek.chat.completions.create({
                 model: "deepseek-chat",
                 messages: chatHistory,
             });
-            aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "AI did not return a valid response.";
+            aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
 
-        // Step 9: Save chat to DB
+        // Step 10: Save to chat_history
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
-            [conversation_id, fullUserMessage, aiResponse, filePaths.join(","), extracted_summary || null]
+            [conversation_id, fullUserMessage, aiResponse, filePaths.join(",") || null, extracted_summary || null]
         );
 
+        // Step 11: Respond to frontend
         res.json({
             success: true,
             conversation_id,
@@ -427,6 +441,7 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
 
 
