@@ -102,7 +102,7 @@ const extractText = async (buffer, mimeType) => {
     }
 };
 
-module.exports = extractText;
+ 
 
 
 
