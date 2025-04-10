@@ -141,71 +141,91 @@ const uploadToFTP = require("../utils/ftpUploader");
 
 // 🧠 Full enhanced extraction
 const extractText = async (buffer, mimeType) => {
-    try {
-        if (mimeType === "application/pdf") {
-            // Step 1: Try text extraction
-            const parsed = await pdf(buffer);
-            let textContent = parsed.text.trim();
+  try {
+      if (mimeType === "application/pdf") {
+          const parsed = await pdf(buffer);
+          let textContent = parsed.text.trim();
 
-            console.log("🧪 Parsed PDF content length:", textContent.length);
-            console.log("📄 Total pages (from pdf-parse):", parsed.numpages);
+          console.log("🧪 Parsed PDF content length:", textContent.length);
+          console.log("📄 Total pages (from pdf-parse):", parsed.numpages);
 
-            // Step 2: Fallback if only 1 page or almost no text
-            if (!textContent || parsed.numpages <= 1) {
-                console.log("🔁 Starting full OCR fallback for all pages...");
+          // Fallback to OCR if too short or only 1 page
+          if (!textContent || parsed.numpages <= 1 || textContent.length < 100) {
+              console.log("🔁 Using full OCR fallback for better accuracy...");
 
-                // Save buffer as temp PDF file
-                const tmpFile = await tmp.file({ postfix: ".pdf" });
-                await fs.writeFile(tmpFile.path, buffer);
+              const tmpFile = await tmp.file({ postfix: ".pdf" });
+              await fs.writeFile(tmpFile.path, buffer);
 
-                const pdfDoc = await PDFDocument.load(buffer);
-                const totalPages = pdfDoc.getPageCount();
+              const pdfDoc = await PDFDocument.load(buffer);
+              const totalPages = pdfDoc.getPageCount();
 
-                const pdf2picConverter = fromPath(tmpFile.path, {
-                    density: 150,
-                    format: "png",
-                    width: 1200,
-                    height: 1600,
-                    saveFilename: "ocr_page",
-                    savePath: "/tmp",
-                });
+              const pdf2picConverter = fromPath(tmpFile.path, {
+                  density: 150,
+                  format: "png",
+                  width: 1200,
+                  height: 1600,
+                  saveFilename: "ocr_page",
+                  savePath: "/tmp",
+              });
 
-                let ocrText = "";
+              let ocrText = "";
 
-                for (let i = 1; i <= totalPages; i++) {
-                    const pageImage = await pdf2picConverter(i);
-                    const { data } = await Tesseract.recognize(pageImage.path, "eng", {
-                        logger: m => console.log(`📄 Page ${i} OCR progress:`, m.progress),
-                    });
-                    ocrText += `\n--- Page ${i} ---\n` + data.text;
-                }
+              for (let i = 1; i <= totalPages; i++) {
+                  try {
+                      const pageImage = await pdf2picConverter(i);
+                      const { data } = await Tesseract.recognize(pageImage.path, "eng", {
+                          logger: m => console.log(`📄 Page ${i} OCR progress:`, m.progress),
+                      });
 
-                return ocrText.trim();
-            }
+                      ocrText += `\n--- Page ${i} ---\n${data.text.trim()}`;
+                  } catch (err) {
+                      console.error(`❌ OCR failed for page ${i}:`, err.message);
+                  }
+              }
 
-            return textContent;
+              return ocrText.trim();
+          }
 
-        } else if (mimeType === "text/plain") {
-            return buffer.toString("utf8");
+          // 🧠 Still split text by page numbers to make it professional
+          const pdfDoc = await PDFDocument.load(buffer);
+          const totalPages = pdfDoc.getPageCount();
+          let fullPageText = "";
 
-        } else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-            const result = await mammoth.extractRawText({ buffer });
-            return result.value.trim();
+          for (let i = 0; i < totalPages; i++) {
+              const singlePagePdf = await PDFDocument.create();
+              const [copiedPage] = await singlePagePdf.copyPages(pdfDoc, [i]);
+              singlePagePdf.addPage(copiedPage);
+              const singlePageBytes = await singlePagePdf.save();
+              const pageParsed = await pdf(singlePageBytes);
 
-        } else if (mimeType.startsWith("image")) {
-            const { data } = await Tesseract.recognize(buffer, "eng", {
-                logger: m => console.log("🖼️ OCR progress:", m.progress),
-            });
-            return data.text.trim();
+              fullPageText += `\n--- Page ${i + 1} ---\n${pageParsed.text.trim()}`;
+          }
 
-        } else {
-            return "Unsupported file type.";
-        }
-    } catch (err) {
-        console.error("❌ Text extraction error:", err.message);
-        return null;
-    }
+          return fullPageText.trim();
+
+      } else if (mimeType === "text/plain") {
+          return buffer.toString("utf8");
+
+      } else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+          const result = await mammoth.extractRawText({ buffer });
+          return result.value.trim();
+
+      } else if (mimeType.startsWith("image")) {
+          const { data } = await Tesseract.recognize(buffer, "eng", {
+              logger: m => console.log("🖼️ OCR progress:", m.progress),
+          });
+          return data.text.trim();
+
+      } else {
+          return "Unsupported file type.";
+      }
+  } catch (err) {
+      console.error("❌ Text extraction error:", err.message);
+      return null;
+  }
 };
+
+
 
 exports.uploadFiles = async (req, res) => {
     try {
