@@ -35,6 +35,9 @@ const { fromPath } = require("pdf2pic"); // Converts PDF pages to images
 const tmp = require("tmp-promise");
 const fs = require("fs").promises;
 const path = require("path");
+const db = require("../config/db");
+const uploadToFTP = require("../utils/ftpUploader");
+
 
 // 🧠 Full enhanced extraction
 const extractText = async (buffer, mimeType) => {
