@@ -144,14 +144,14 @@ const extractText = async (buffer, mimeType) => {
   try {
       if (mimeType === "application/pdf") {
           const parsed = await pdf(buffer);
-          let textContent = parsed.text.trim();
+          const initialText = parsed.text.trim();
 
-          console.log("🧪 Parsed PDF content length:", textContent.length);
-          console.log("📄 Total pages (from pdf-parse):", parsed.numpages);
+          console.log("🧪 Parsed PDF content length:", initialText.length);
+          console.log("📄 Total pages (pdf-parse):", parsed.numpages);
 
-          // Fallback to OCR if too short or only 1 page
-          if (!textContent || parsed.numpages <= 1 || textContent.length < 100) {
-              console.log("🔁 Using full OCR fallback for better accuracy...");
+          // If text is short or only one page, fall back to OCR
+          if (!initialText || parsed.numpages <= 1 || initialText.length < 100) {
+              console.log("🔁 Falling back to OCR (pdf2pic + Tesseract)...");
 
               const tmpFile = await tmp.file({ postfix: ".pdf" });
               await fs.writeFile(tmpFile.path, buffer);
@@ -168,28 +168,33 @@ const extractText = async (buffer, mimeType) => {
                   savePath: "/tmp",
               });
 
-              let ocrText = "";
+              let ocrTextByPage = [];
 
               for (let i = 1; i <= totalPages; i++) {
                   try {
                       const pageImage = await pdf2picConverter(i);
                       const { data } = await Tesseract.recognize(pageImage.path, "eng", {
-                          logger: m => console.log(`📄 Page ${i} OCR progress:`, m.progress),
+                          logger: m => console.log(`📄 OCR Progress (Page ${i}):`, m.progress),
                       });
 
-                      ocrText += `\n--- Page ${i} ---\n${data.text.trim()}`;
+                      const pageText = data.text.trim();
+                      ocrTextByPage.push(`\n--- Page ${i} ---\n${pageText || "[No text found on this page]"}`);
                   } catch (err) {
-                      console.error(`❌ OCR failed for page ${i}:`, err.message);
+                      console.error(`❌ OCR failed on page ${i}:`, err.message);
+                      ocrTextByPage.push(`\n--- Page ${i} ---\n[OCR failed: ${err.message}]`);
                   }
               }
 
-              return ocrText.trim();
+              const fullOcrText = ocrTextByPage.join("\n");
+              console.log("🧠 Full OCR Extracted Text Length:", fullOcrText.length);
+              return fullOcrText.trim();
           }
 
-          // 🧠 Still split text by page numbers to make it professional
+          // Otherwise, use pdf-parse page-by-page split
           const pdfDoc = await PDFDocument.load(buffer);
           const totalPages = pdfDoc.getPageCount();
-          let fullPageText = "";
+
+          let fullTextByPage = [];
 
           for (let i = 0; i < totalPages; i++) {
               const singlePagePdf = await PDFDocument.create();
@@ -198,10 +203,12 @@ const extractText = async (buffer, mimeType) => {
               const singlePageBytes = await singlePagePdf.save();
               const pageParsed = await pdf(singlePageBytes);
 
-              fullPageText += `\n--- Page ${i + 1} ---\n${pageParsed.text.trim()}`;
+              fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageParsed.text.trim()}`);
           }
 
-          return fullPageText.trim();
+          const finalExtracted = fullTextByPage.join("\n");
+          console.log("✅ Full extracted text length from pdf-parse:", finalExtracted.length);
+          return finalExtracted.trim();
 
       } else if (mimeType === "text/plain") {
           return buffer.toString("utf8");
@@ -224,6 +231,7 @@ const extractText = async (buffer, mimeType) => {
       return null;
   }
 };
+
 
 
 
