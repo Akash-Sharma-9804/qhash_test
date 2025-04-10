@@ -334,41 +334,43 @@ exports.askChatbot = async (req, res) => {
         }
 
         // Step 2: Check ownership or auto-create if invalid
-        const [existingConversation] = await db.query(
+        const [conversationRows] = await db.query(
             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
             [conversation_id, user_id]
         );
 
-        if (!Array.isArray(existingConversation) || existingConversation.length === 0) {
-            const [conversationResult] = await db.query(
+        if (!Array.isArray(conversationRows) || conversationRows.length === 0) {
+            const [newConversation] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
                 [user_id, userMessage?.substring(0, 20) || "New Chat"]
             );
-            conversation_id = conversationResult.insertId;
+            conversation_id = newConversation.insertId;
         }
 
-        // Step 3: Fetch last 5 messages
-        const [historyResultsRaw] = await db.query(
+        // Step 3: Fetch chat history
+        const [historyRows] = await db.query(
             "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
             [conversation_id]
         );
 
-        const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
-
-        const chatHistory = historyResults
-            .map(chat => [
-                { role: "user", content: chat.message },
-                { role: "assistant", content: chat.response }
-            ])
-            .flat()
-            .filter(m => m?.content);
+        const chatHistory = Array.isArray(historyRows)
+            ? historyRows
+                  .map(chat => [
+                      { role: "user", content: chat.message },
+                      { role: "assistant", content: chat.response }
+                  ])
+                  .flat()
+                  .filter(msg => msg?.content)
+            : [];
 
         // Step 4: System prompt
         const currentDate = new Date().toLocaleDateString('en-US', {
-            year: 'numeric', month: 'long', day: 'numeric'
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
         });
 
-        const systemPrompt = {
+        chatHistory.unshift({
             role: "system",
             content:
                 "You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
@@ -376,23 +378,21 @@ exports.askChatbot = async (req, res) => {
                 "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
                 "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
                 `If someone asks about your knowledge cutoff date, *only say*: 'I’ve got information up to the present, ${currentDate}.'`
-        };
+        });
 
-        chatHistory.unshift(systemPrompt);
-
-        // Step 5: Fetch uploaded files
+        // Step 5: Fetch uploaded files (if any)
         let fileNames = [];
         let filePaths = [];
 
         if (extracted_summary) {
-            const [files] = await db.query(
+            const [fileRows] = await db.query(
                 "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
                 [conversation_id]
             );
 
-            if (Array.isArray(files) && files.length > 0) {
-                for (const f of files) {
-                    const path = f.file_path;
+            if (Array.isArray(fileRows) && fileRows.length > 0) {
+                for (const file of fileRows) {
+                    const path = file.file_path;
                     const name = path.split("/").pop();
                     filePaths.push(path);
                     fileNames.push(name);
@@ -400,70 +400,72 @@ exports.askChatbot = async (req, res) => {
             }
         }
 
-        // Step 6: Build full message with filenames
+        // Step 6: Build user message with filenames
         let fullUserMessage = userMessage || "";
         if (fileNames.length > 0) {
             fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
         }
 
-        console.log("📨 Final User Message:", fullUserMessage);
-        console.log("📂 File Paths:", filePaths);
+        // Step 7: Add current message & file summary to chat history
+        chatHistory.push({ role: "user", content: fullUserMessage });
 
-        // Step 7: Append message and summary to chat history
-        chatHistory.push({
-            role: "user",
-            content: fullUserMessage,
-        });
-
-        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
+        if (
+            extracted_summary &&
+            extracted_summary.trim() &&
+            extracted_summary !== "No readable content"
+        ) {
             chatHistory.push({
                 role: "user",
                 content: `[Summary of uploaded files:]\n${extracted_summary}`
             });
         }
 
-        // Step 8: Call AI
+        // Step 8: Generate AI response
         let aiResponse = "";
 
         if (process.env.USE_OPENAI === "true") {
             const openaiResponse = await openai.chat.completions.create({
                 model: "gpt-4",
-                messages: chatHistory,
+                messages: chatHistory
             });
             aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         } else {
             const deepseekResponse = await deepseek.chat.completions.create({
                 model: "deepseek-chat",
-                messages: chatHistory,
+                messages: chatHistory
             });
-            aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+            aiResponse = deepseekResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
 
-        // Step 9: Save into chat_history
+        // Step 9: Save to chat_history
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
             [
                 conversation_id,
                 fullUserMessage,
                 aiResponse,
-                filePaths.join(","), // save paths
+                filePaths.join(",") || null,
                 extracted_summary || null
             ]
         );
 
-        // Step 10: Respond
+        // Step 10: Send response
         res.json({
             success: true,
             conversation_id,
             response: aiResponse,
-            uploaded_files: fileNames,
+            uploaded_files: fileNames
         });
 
     } catch (error) {
         console.error("❌ askChatbot error:", error.stack || error.message);
-        res.status(500).json({ error: "Internal server error", details: error.message });
+        res.status(500).json({
+            error: "Internal server error",
+            details: error.message || "Something went wrong."
+        });
     }
 };
+
 
 
 
