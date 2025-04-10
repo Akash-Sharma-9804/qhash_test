@@ -135,7 +135,7 @@ const { fromPath } = require("pdf2pic");
 const tmp = require("tmp-promise");
 const fs = require("fs").promises;
 const path = require("path");
-const { PDFDocument } = require("pdf-lib"); // ✅ new
+const { PDFDocument } = require("pdf-lib"); // ✅ For page count
 const db = require("../config/db");
 const uploadToFTP = require("../utils/ftpUploader");
 
@@ -147,9 +147,12 @@ const extractText = async (buffer, mimeType) => {
             const parsed = await pdf(buffer);
             let textContent = parsed.text.trim();
 
-            // Step 2: If almost no text, fallback to OCR
-            if (!textContent || textContent.length < 50) {
-                console.log("🔍 PDF seems to be image-based, falling back to OCR...");
+            console.log("🧪 Parsed PDF content length:", textContent.length);
+            console.log("📄 Total pages (from pdf-parse):", parsed.numpages);
+
+            // Step 2: Fallback if only 1 page or almost no text
+            if (!textContent || parsed.numpages <= 1) {
+                console.log("🔁 Starting full OCR fallback for all pages...");
 
                 // Save buffer as temp PDF file
                 const tmpFile = await tmp.file({ postfix: ".pdf" });
@@ -293,6 +296,3 @@ exports.uploadFiles = async (req, res) => {
         });
     }
 };
-
-
- 
