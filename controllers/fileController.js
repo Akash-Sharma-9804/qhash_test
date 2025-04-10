@@ -183,15 +183,17 @@ const extractText = async (buffer, mimeType) => {
         }
 
         await tmpFile.cleanup?.();
+
       } else {
         console.log("⚡ Extracting each page using pdf-lib + pdf-parse...");
+
         for (let i = 0; i < totalPages; i++) {
           try {
             const newDoc = await PDFDocument.create();
-            const [copiedPage] = await sourceDoc.copyPages(sourceDoc, [i]);
-            newDoc.addPage(copiedPage);
-            const pageBuffer = await newDoc.save();
-            const pageParsed = await pdf(pageBuffer);
+            const copiedPages = await sourceDoc.copyPages(sourceDoc, [i]); // ✅ Correct copy
+            newDoc.addPage(copiedPages[0]); // ✅ Now it works
+            const singlePageBuffer = await newDoc.save();
+            const pageParsed = await pdf(singlePageBuffer);
             const pageText = pageParsed.text?.trim() || "[No text found]";
             fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageText}`);
           } catch (err) {
@@ -206,6 +208,7 @@ const extractText = async (buffer, mimeType) => {
       return fullText;
     }
 
+    // Other file types
     if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const result = await mammoth.extractRawText({ buffer });
       return result.value.trim();
@@ -228,6 +231,7 @@ const extractText = async (buffer, mimeType) => {
     return "[Extraction failed]";
   }
 };
+
 
 
 
