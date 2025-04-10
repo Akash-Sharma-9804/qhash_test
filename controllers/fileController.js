@@ -138,14 +138,12 @@ const { PDFDocument } = require("pdf-lib");
 const db = require("../config/db");
 const uploadToFTP = require("../utils/ftpUploader");
 
- 
-
+// 📄 Extract text from various file types
 const extractText = async (buffer, mimeType) => {
     try {
         if (mimeType === "application/pdf") {
             const parsed = await pdf(buffer);
             const initialText = parsed.text?.trim() || "";
-
             console.log("📄 Parsed PDF content length:", initialText.length);
 
             const pdfDoc = await PDFDocument.load(buffer);
@@ -153,12 +151,11 @@ const extractText = async (buffer, mimeType) => {
             console.log("📚 Total PDF pages:", totalPages);
 
             const fullTextByPage = [];
-
-            // Use OCR if short/empty or scanned PDF
             const useOCR = !initialText || initialText.length < 100;
 
             if (useOCR) {
                 console.log("🔁 Falling back to OCR for all pages...");
+
                 const tmpFile = await tmp.file({ postfix: ".pdf" });
                 await fs.writeFile(tmpFile.path, buffer);
 
@@ -183,6 +180,9 @@ const extractText = async (buffer, mimeType) => {
                         fullTextByPage.push(`\n--- Page ${i} ---\n[OCR failed: ${err.message}]`);
                     }
                 }
+
+                // Clean up tmp file
+                await tmpFile.cleanup?.();
 
             } else {
                 console.log("⚡ Extracting all pages using pdf-parse + pdf-lib...");
@@ -213,7 +213,7 @@ const extractText = async (buffer, mimeType) => {
         }
 
         if (mimeType === "text/plain") {
-            return buffer.toString("utf8");
+            return buffer.toString("utf8").trim();
         }
 
         if (mimeType.startsWith("image")) {
@@ -244,6 +244,7 @@ exports.uploadFiles = async (req, res) => {
         let { conversation_id } = req.body;
         let finalConversationId = conversation_id;
 
+        // 🧵 Create new conversation if needed
         if (!conversation_id) {
             const [convResult] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
@@ -267,9 +268,9 @@ exports.uploadFiles = async (req, res) => {
 
             try {
                 extractedText = await extractText(buffer, file.mimetype);
-                console.log("🧾 Final extracted text:\n", extractedText?.slice(0, 1000));
+                console.log("🧾 Final extracted text preview:\n", extractedText?.slice(0, 500));
             } catch (err) {
-                console.error("❌ Failed to extract text:", err.message);
+                console.error("❌ Text extraction failed:", err.message);
             }
 
             try {
@@ -279,16 +280,15 @@ exports.uploadFiles = async (req, res) => {
             }
 
             if (ftpPath) {
-                const fileResult = await db.query(
-                    "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
-                    [user_id, ftpPath, extractedText || "", finalConversationId]
-                );
-
-                console.log("Database Insert Result:", fileResult);
-
-                results.push({
-                    file_name: originalName,
-                });
+                try {
+                    await db.query(
+                        "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
+                        [user_id, ftpPath, extractedText || "", finalConversationId]
+                    );
+                    results.push({ file_name: originalName });
+                } catch (err) {
+                    console.error("❌ DB insert failed:", err.message);
+                }
             }
 
             if (extractedText) {
@@ -303,7 +303,7 @@ exports.uploadFiles = async (req, res) => {
             extracted_summary: allText
                 ? `Here's what I understood from your files:\n${allText.slice(0, 1000)}${allText.length > 1000 ? "..." : ""}`
                 : "I received your files, but couldn't extract readable text from them.",
-            extracted_summary_raw: allText, // ✅ send this to AI in /chat for full context
+            extracted_summary_raw: allText,
         };
 
         return res.status(201).json(response);
