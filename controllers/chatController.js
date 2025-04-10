@@ -333,26 +333,32 @@ exports.askChatbot = async (req, res) => {
             conversation_id = conversationResult.insertId;
         }
 
-        // Step 2: Check ownership
+        // Step 2: Check ownership or auto-create if invalid
         const [existingConversation] = await db.query(
             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
             [conversation_id, user_id]
         );
+
         if (!Array.isArray(existingConversation) || existingConversation.length === 0) {
-            return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
+            const [conversationResult] = await db.query(
+                "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+                [user_id, userMessage?.substring(0, 20) || "New Chat"]
+            );
+            conversation_id = conversationResult.insertId;
         }
 
-        // Step 3: Fetch recent chat history
-        const [historyRows] = await db.query(
+        // Step 3: Fetch last 5 messages
+        const [historyResultsRaw] = await db.query(
             "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 5",
             [conversation_id]
         );
-        const historyResults = Array.isArray(historyRows) ? historyRows : [];
+
+        const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
 
         const chatHistory = historyResults
             .map(chat => [
                 { role: "user", content: chat.message },
-                { role: "assistant", content: chat.response },
+                { role: "assistant", content: chat.response }
             ])
             .flat()
             .filter(m => m?.content);
@@ -374,47 +380,51 @@ exports.askChatbot = async (req, res) => {
 
         chatHistory.unshift(systemPrompt);
 
-        // Step 5: Get uploaded file data for this conversation
-        let fileData = [];
+        // Step 5: Fetch uploaded files
+        let fileNames = [];
+        let filePaths = [];
+
         if (extracted_summary) {
             const [files] = await db.query(
-                "SELECT file_path, extracted_text FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
+                "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
                 [conversation_id]
             );
 
             if (Array.isArray(files) && files.length > 0) {
-                fileData = files.map(f => ({
-                    name: f.file_path.split("/").pop(),
-                    path: f.file_path
-                }));
+                for (const f of files) {
+                    const path = f.file_path;
+                    const name = path.split("/").pop();
+                    filePaths.push(path);
+                    fileNames.push(name);
+                }
             }
         }
 
-        // Step 6: Construct user message with file names
+        // Step 6: Build full message with filenames
         let fullUserMessage = userMessage || "";
-        if (fileData.length > 0) {
-            const fileNamesText = fileData.map(f => `📎 ${f.name}`).join("\n");
-            fullUserMessage += `\n\n[Uploaded files:]\n${fileNamesText}`;
+        if (fileNames.length > 0) {
+            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
         }
 
-        const filePaths = fileData.map(f => f.path);
-        const fileNames = fileData.map(f => f.name);
+        console.log("📨 Final User Message:", fullUserMessage);
+        console.log("📂 File Paths:", filePaths);
 
-        // Step 7: Add to chat history
+        // Step 7: Append message and summary to chat history
         chatHistory.push({
             role: "user",
-            content: fullUserMessage
+            content: fullUserMessage,
         });
 
         if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
             chatHistory.push({
                 role: "user",
-                content: `[Here is a summary of the uploaded file content:]\n${extracted_summary}`
+                content: `[Summary of uploaded files:]\n${extracted_summary}`
             });
         }
 
-        // Step 8: Get AI response
+        // Step 8: Call AI
         let aiResponse = "";
+
         if (process.env.USE_OPENAI === "true") {
             const openaiResponse = await openai.chat.completions.create({
                 model: "gpt-4",
@@ -436,27 +446,25 @@ exports.askChatbot = async (req, res) => {
                 conversation_id,
                 fullUserMessage,
                 aiResponse,
-                filePaths.join(","),
+                filePaths.join(","), // save paths
                 extracted_summary || null
             ]
         );
 
-        // Step 10: Return response
+        // Step 10: Respond
         res.json({
             success: true,
             conversation_id,
             response: aiResponse,
-            uploaded_files: fileNames
+            uploaded_files: fileNames,
         });
 
     } catch (error) {
         console.error("❌ askChatbot error:", error.stack || error.message);
-        res.status(500).json({
-            error: "Internal server error",
-            details: error.message
-        });
+        res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
 
 
