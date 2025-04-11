@@ -106,14 +106,6 @@ import base64
 import tempfile
 import fitz  # PyMuPDF
 
-# For image description
-from transformers import BlipProcessor, BlipForConditionalGeneration
-import torch
-
-# Load BLIP model only once
-processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-
 def extract_docx_text(content):
     with BytesIO(content) as f:
         doc = Document(f)
@@ -125,14 +117,8 @@ def extract_txt_text(content):
 def extract_image_text(content):
     with BytesIO(content) as f:
         img = Image.open(f).convert("RGB")
-        text_ocr = pytesseract.image_to_string(img).strip()
-
-        # Image captioning
-        inputs = processor(img, return_tensors="pt")
-        out = model.generate(**inputs)
-        caption = processor.decode(out[0], skip_special_tokens=True)
-
-        return f"[🧾 OCR Text:]\n{text_ocr or '[No visible text]'}\n\n[🖼️ Image Description:]\n{caption}"
+        text = pytesseract.image_to_string(img)
+        return text.strip()
 
 def extract_excel_text(content):
     with BytesIO(content) as f:
@@ -193,9 +179,9 @@ def main():
             result = "[Unsupported file type]"
 
         print(json.dumps({"text": result}))
-
     except Exception as e:
         print(json.dumps({"error": str(e)}))
 
 if __name__ == "__main__":
     main()
+
