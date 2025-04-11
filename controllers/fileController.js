@@ -374,7 +374,9 @@ exports.uploadFiles = async (req, res) => {
 
       try {
         extractedText = await extractText(buffer, file.mimetype);
-        console.log("🧾 Extracted text preview:\n", extractedText?.slice(0, 300));
+        console.log("🧾 Pages Extracted:\n", extractedText.split("\n--- Page").length - 1);
+
+
       } catch (err) {
         console.error("❌ Text extraction failed:", err.message);
       }
@@ -403,6 +405,16 @@ exports.uploadFiles = async (req, res) => {
       }
     }
 
+    // const response = {
+    //   success: true,
+    //   conversation_id: finalConversationId,
+    //   files: results,
+    //   extracted_summary: allText
+    //     ? `Here's what I understood from your files:\n${allText.slice(0, 1000)}${allText.length > 1000 ? "..." : ""}`
+    //     : "I received your files, but couldn't extract readable text from them.",
+    //     extracted_summary_raw: allText, 
+    // };
+
     const response = {
       success: true,
       conversation_id: finalConversationId,
@@ -410,8 +422,9 @@ exports.uploadFiles = async (req, res) => {
       extracted_summary: allText
         ? `Here's what I understood from your files:\n${allText.slice(0, 1000)}${allText.length > 1000 ? "..." : ""}`
         : "I received your files, but couldn't extract readable text from them.",
-      extracted_summary_raw: allText,
+      extracted_summary_raw: allText, // ✅ Send full text
     };
+    
 
     return res.status(201).json(response);
 
