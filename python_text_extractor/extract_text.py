@@ -347,6 +347,7 @@ def extract_excel_text(content):
 def extract_pdf_pagewise(content):
     text_by_page = []
 
+    # Step 1: Try with pdfminer.six
     try:
         with BytesIO(content) as f:
             for i, page_layout in enumerate(extract_pages(f), start=1):
@@ -358,10 +359,10 @@ def extract_pdf_pagewise(content):
     except Exception as e:
         print(f"⚠️ pdfminer failed: {str(e)}")
 
-    # Check if result is meaningful; fallback if it's not
+    # Step 2: Fallback if total extracted text is low
     total_text_length = sum(len(p) for p in text_by_page)
     if not text_by_page or total_text_length < 500:
-        print("⚠️ Falling back to OCR for scanned PDF...")
+        print("⚠️ Falling back to OCR (pdf was too short or mostly empty)")
         text_by_page = []
         try:
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -380,6 +381,7 @@ def extract_pdf_pagewise(content):
         except Exception as e:
             return f"[OCR fallback failed: {str(e)}]"
 
+    print(f"✅ Extracted {len(text_by_page)} pages.")
     return "\n".join(text_by_page).strip()
 
 
@@ -409,3 +411,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
