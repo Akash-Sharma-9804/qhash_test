@@ -375,26 +375,29 @@ exports.askChatbot = async (req, res) => {
 
         chatHistory.unshift(systemPrompt);
 
-        // Step 5: Get uploaded file names
-        let fileNames = [];
+        // Step 5: Get uploaded file paths and names
+let filePaths = [];
+let fileNames = [];
 
-        if (extracted_summary) {
-            const [files] = await db.query(
-                "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
-                [conversation_id]
-            );
-            if (Array.isArray(files) && files.length > 0) {
-                fileNames = files.map(f => f.file_path.split("/").pop());
-            }
-        }
+if (extracted_summary) {
+    const [files] = await db.query(
+        "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
+        [conversation_id]
+    );
+    if (Array.isArray(files) && files.length > 0) {
+        filePaths = files.map(f => f.file_path);
+        fileNames = filePaths.map(p => p.split("/").pop());
+    }
+}
 
-        // Step 6: Construct full user message (userMessage + filenames)
-        let fullUserMessage = userMessage || "";
-        let filePaths = [];
-        if (fileNames.length > 0) {
-            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
-            filePaths = fileNames.map(name => `/Quantum_AI/uploads/${name}`);  // Include file paths
-        }
+// Step 6: Construct full user message
+let fullUserMessage = userMessage || "";
+
+if (fileNames.length > 0) {
+    fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
+    // DO NOT override filePaths here — it's already correct
+}
+
 
         console.log("Full User Message (with filenames only):", fullUserMessage);
         console.log("File Paths (for DB insertion):", filePaths); // Debug log to check if filePaths is populated
