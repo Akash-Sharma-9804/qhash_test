@@ -348,7 +348,6 @@ def extract_pdf_pagewise(content):
     text_by_page = []
 
     try:
-        # Try extracting page-by-page using pdfminer
         with BytesIO(content) as f:
             for i, page_layout in enumerate(extract_pages(f), start=1):
                 page_text = ""
@@ -359,7 +358,7 @@ def extract_pdf_pagewise(content):
     except Exception as e:
         print(f"⚠️ pdfminer failed: {str(e)}")
 
-    # Fallback to OCR if content is mostly empty
+    # Check if result is meaningful; fallback if it's not
     total_text_length = sum(len(p) for p in text_by_page)
     if not text_by_page or total_text_length < 500:
         print("⚠️ Falling back to OCR for scanned PDF...")
@@ -379,7 +378,7 @@ def extract_pdf_pagewise(content):
                         ocr_text = pytesseract.image_to_string(img)
                         text_by_page.append(f"\n--- OCR Page {i} ---\n{ocr_text.strip() or '[No text found]'}")
         except Exception as e:
-            return json.dumps({"error": f"OCR fallback failed: {str(e)}"})
+            return f"[OCR fallback failed: {str(e)}]"
 
     return "\n".join(text_by_page).strip()
 
