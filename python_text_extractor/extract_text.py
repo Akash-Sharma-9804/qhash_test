@@ -218,23 +218,18 @@ import base64
 import tempfile
 import fitz  # PyMuPDF
 
-
 def extract_docx_text(content):
     with BytesIO(content) as f:
         doc = Document(f)
         return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
 
-
 def extract_txt_text(content):
     return content.decode('utf-8').strip()
-
 
 def extract_image_text(content):
     with BytesIO(content) as f:
         img = Image.open(f).convert("RGB")
-        text = pytesseract.image_to_string(img)
-        return text.strip()
-
+        return pytesseract.image_to_string(img).strip()
 
 def extract_excel_text(content):
     with BytesIO(content) as f:
@@ -245,11 +240,9 @@ def extract_excel_text(content):
             output += df.to_string(index=False)
         return output.strip()
 
-
 def extract_pdf_with_pagewise_fallback(content):
     text_by_page = []
 
-    # Step 1: Try pdfminer.six page by page
     try:
         with BytesIO(content) as f:
             for i, page_layout in enumerate(extract_pages(f), start=1):
@@ -262,14 +255,12 @@ def extract_pdf_with_pagewise_fallback(content):
     except Exception as e:
         print(f"⚠️ pdfminer failed: {str(e)}")
 
-    # If page-wise text is mostly empty or very short, fallback to OCR
     if not text_by_page or sum(len(p) for p in text_by_page) < 200:
         text_by_page = []
         try:
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 tmp.write(content)
                 tmp.flush()
-
                 doc = fitz.open(tmp.name)
                 for i, page in enumerate(doc, start=1):
                     text = page.get_text()
@@ -284,7 +275,6 @@ def extract_pdf_with_pagewise_fallback(content):
             return f"[OCR fallback failed: {str(e)}]"
 
     return "\n".join(text_by_page).strip()
-
 
 def main():
     try:
@@ -308,7 +298,6 @@ def main():
         print(json.dumps({"text": result}))
     except Exception as e:
         print(json.dumps({"error": str(e)}))
-
 
 if __name__ == "__main__":
     main()

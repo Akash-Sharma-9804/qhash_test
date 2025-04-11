@@ -343,9 +343,7 @@ const extractText = async (buffer, mimeType) => {
 exports.uploadFiles = async (req, res) => {
   try {
     const user_id = req.user?.user_id || req.body.user_id;
-    if (!user_id) {
-      return res.status(400).json({ error: "Missing user_id." });
-    }
+    if (!user_id) return res.status(400).json({ error: "Missing user_id." });
 
     const files = req.files || [];
     const userMessage = req.body.message?.trim();
@@ -362,6 +360,7 @@ exports.uploadFiles = async (req, res) => {
 
     const results = [];
     let allText = "";
+    const fileNamesForAI = [];
 
     for (const file of files) {
       const buffer = file.buffer;
@@ -392,14 +391,14 @@ exports.uploadFiles = async (req, res) => {
             "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id) VALUES (?, ?, ?, ?)",
             [user_id, ftpPath, extractedText || "", finalConversationId]
           );
-          results.push({ file_name: originalName });
+          results.push({ file_name: originalName, file_path: ftpPath });
+          fileNamesForAI.push(`📎 ${originalName}`);
         } catch (err) {
           console.error("❌ DB insert failed:", err.message);
         }
       }
 
       if (extractedText) {
-        // Append file header for clarity per file
         allText += `\n\n📎 ${originalName}\n${extractedText}`;
       }
     }
@@ -424,3 +423,4 @@ exports.uploadFiles = async (req, res) => {
     });
   }
 };
+
