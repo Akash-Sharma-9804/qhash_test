@@ -376,19 +376,15 @@ exports.askChatbot = async (req, res) => {
         chatHistory.unshift(systemPrompt);
 
         // Step 5: Get uploaded file paths and names
-let filePaths = [];
-let fileNames = [];
-
-if (extracted_summary) {
-    const [files] = await db.query(
-        "SELECT file_path FROM uploaded_files WHERE conversation_id = ? ORDER BY id DESC",
-        [conversation_id]
-    );
-    if (Array.isArray(files) && files.length > 0) {
-        filePaths = files.map(f => f.file_path);
-        fileNames = filePaths.map(p => p.split("/").pop());
-    }
-}
+        let filePaths = [];
+        let fileNames = [];
+        
+        if (Array.isArray(req.body.uploaded_file_metadata) && req.body.uploaded_file_metadata.length > 0) {
+            filePaths = req.body.uploaded_file_metadata.map(f => f.file_path);
+            fileNames = req.body.uploaded_file_metadata.map(f => f.file_name);
+          }
+          
+        
 
 // Step 6: Construct full user message
 let fullUserMessage = userMessage || "";
