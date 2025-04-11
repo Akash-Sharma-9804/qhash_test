@@ -6,3 +6,9 @@ openpyxl
 pillow
 pdf2image
 pymupdf
+transformers
+torch
+torchvision
+
+ 
+
