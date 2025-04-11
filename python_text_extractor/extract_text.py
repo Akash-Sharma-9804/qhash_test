@@ -106,19 +106,23 @@ import base64
 import tempfile
 import fitz  # PyMuPDF
 
+
 def extract_docx_text(content):
     with BytesIO(content) as f:
         doc = Document(f)
         return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
 
+
 def extract_txt_text(content):
-    return content.decode('utf-8').strip()
+    return content.decode("utf-8").strip()
+
 
 def extract_image_text(content):
     with BytesIO(content) as f:
         img = Image.open(f).convert("RGB")
         text = pytesseract.image_to_string(img)
         return text.strip()
+
 
 def extract_excel_text(content):
     with BytesIO(content) as f:
@@ -129,23 +133,33 @@ def extract_excel_text(content):
             output += df.to_string(index=False)
         return output.strip()
 
+
 def extract_pdf_with_fallback(content):
+    text_by_page = []
+
     try:
+        # Try native text extraction first
         with BytesIO(content) as f:
-            extracted = extract_pdf_text(f)
-            if extracted.strip() and len(extracted.strip()) > 100:
-                return extracted.strip()
+            raw_text = extract_pdf_text(f)
+            if raw_text.strip() and len(raw_text.strip()) > 100:
+                # Still break it into pages for reference
+                lines = raw_text.split("\n")
+                approx_lines_per_page = max(1, len(lines) // 10)
+                for i in range(0, len(lines), approx_lines_per_page):
+                    page_num = i // approx_lines_per_page + 1
+                    chunk = lines[i:i + approx_lines_per_page]
+                    text_by_page.append(f"\n--- Page {page_num} ---\n" + "\n".join(chunk))
+                return "\n".join(text_by_page).strip()
     except Exception:
         print("⚠️ pdfminer failed, trying OCR fallback...")
 
-    text_by_page = []
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp.write(content)
             tmp.flush()
 
             doc = fitz.open(tmp.name)
-            for i, page in enumerate(doc, 1):
+            for i, page in enumerate(doc, start=1):
                 text = page.get_text()
                 if text.strip():
                     text_by_page.append(f"\n--- Page {i} ---\n{text.strip()}")
@@ -154,10 +168,12 @@ def extract_pdf_with_fallback(content):
                     img = Image.open(BytesIO(pix.tobytes("png"))).convert("RGB")
                     ocr_text = pytesseract.image_to_string(img)
                     text_by_page.append(f"\n--- OCR Page {i} ---\n{ocr_text.strip() or '[No text found]'}")
+
     except Exception as e:
         return f"[OCR fallback failed: {str(e)}]"
 
     return "\n".join(text_by_page).strip()
+
 
 def main():
     try:
@@ -181,6 +197,7 @@ def main():
         print(json.dumps({"text": result}))
     except Exception as e:
         print(json.dumps({"error": str(e)}))
+
 
 if __name__ == "__main__":
     main()
