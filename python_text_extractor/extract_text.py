@@ -154,7 +154,7 @@ def extract_excel_text(content):
 def extract_pdf_pagewise(content):
     text_by_page = []
 
-    # Step 1: Try with pdfminer.six
+    # Step 1: Try pdfminer.six
     try:
         with BytesIO(content) as f:
             for i, page_layout in enumerate(extract_pages(f), start=1):
@@ -164,18 +164,17 @@ def extract_pdf_pagewise(content):
                         page_text += element.get_text()
                 text_by_page.append(f"\n--- Page {i} ---\n{page_text.strip() or '[No text found]'}")
     except Exception as e:
-        pass  # silently fallback to OCR
+        print(f"⚠️ PDFMiner failed: {str(e)}", file=sys.stderr)
 
-    # Step 2: Fallback to OCR if content is too short or empty
-    total_text_length = sum(len(p) for p in text_by_page)
-    if not text_by_page or total_text_length < 500:
+    # Step 2: Fallback to OCR if too short or mostly empty
+    if not text_by_page or sum(len(p) for p in text_by_page) < 500:
         text_by_page = []
         try:
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 tmp.write(content)
                 tmp.flush()
                 doc = fitz.open(tmp.name)
-                for i, page in enumerate(doc, 1):
+                for i, page in enumerate(doc, start=1):
                     text = page.get_text()
                     if text.strip():
                         text_by_page.append(f"\n--- Page {i} ---\n{text.strip()}")
@@ -209,11 +208,13 @@ def main():
         else:
             result = "[Unsupported file type]"
 
-        # ✅ THIS should be the ONLY output
+        # ✅ Only send valid JSON to stdout
         print(json.dumps({"text": result}))
+
     except Exception as e:
         print(json.dumps({"error": str(e)}))
 
 
 if __name__ == "__main__":
     main()
+
