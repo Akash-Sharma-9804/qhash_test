@@ -128,102 +128,52 @@
 // };
 
 
-const pdf = require("pdf-parse");
-const mammoth = require("mammoth");
-const Tesseract = require("tesseract.js");
-const { fromPath } = require("pdf2pic");
-const tmp = require("tmp-promise");
-const fs = require("fs").promises;
-const { PDFDocument } = require("pdf-lib");
 const db = require("../config/db");
 const uploadToFTP = require("../utils/ftpUploader");
-
- 
- 
- 
- 
+const { spawn } = require("child_process");
 
 const extractText = async (buffer, mimeType) => {
-  try {
-    if (mimeType === "application/pdf") {
-      const parsed = await pdf(buffer);
-      const rawText = parsed.text?.trim() || "";
-      const totalPages = parsed.numpages;
-      console.log("📚 Total PDF pages:", totalPages);
-      console.log("📄 Parsed PDF text length:", rawText.length);
+  return new Promise((resolve, reject) => {
+    const pythonProcess = spawn("python3", ["python_text_extractor/extract_text.py"]);
 
-      const useOCR = !rawText || rawText.length < 100;
+    const input = JSON.stringify({
+      buffer: buffer.toString("base64"),
+      mimeType,
+    });
 
-      if (useOCR) {
-        console.log("🔁 Falling back to OCR for all pages...");
-        const tmpFile = await tmp.file({ postfix: ".pdf" });
-        await fs.writeFile(tmpFile.path, buffer);
+    let result = "";
+    let error = "";
 
-        const converter = fromPath(tmpFile.path, {
-          density: 150,
-          format: "png",
-          width: 1200,
-          height: 1600,
-          savePath: "/tmp",
-        });
+    pythonProcess.stdin.write(input);
+    pythonProcess.stdin.end();
 
-        const fullTextByPage = [];
+    pythonProcess.stdout.on("data", (data) => {
+      result += data.toString();
+    });
 
-        for (let i = 1; i <= totalPages; i++) {
-          try {
-            const pageImage = await converter(i);
-            const { data } = await Tesseract.recognize(pageImage.path, "eng", {
-              logger: m => console.log(`📄 OCR Progress (Page ${i}):`, m.progress),
-            });
-            const pageText = data.text?.trim() || "[No text found]";
-            fullTextByPage.push(`\n--- Page ${i} ---\n${pageText}`);
-          } catch (err) {
-            console.error(`❌ OCR failed on page ${i}:`, err.message);
-            fullTextByPage.push(`\n--- Page ${i} ---\n[OCR failed: ${err.message}]`);
-          }
+    pythonProcess.stderr.on("data", (data) => {
+      error += data.toString();
+    });
+
+    pythonProcess.on("close", (code) => {
+      if (code !== 0) {
+        console.error("❌ Python process exited with code", code);
+        return reject(new Error(error || "Python script failed"));
+      }
+
+      try {
+        const output = JSON.parse(result);
+        if (output.error) {
+          return reject(new Error(output.error));
         }
-
-        await tmpFile.cleanup?.();
-        return fullTextByPage.join("\n").trim();
+        resolve(output.text);
+      } catch (err) {
+        reject(new Error("Invalid JSON from Python: " + err.message));
       }
-
-      // 🔍 Attempt to simulate page breaks (pdf-parse doesn't do this perfectly)
-      const lines = rawText.split("\n");
-      const approxLinesPerPage = Math.ceil(lines.length / totalPages);
-      const fullTextByPage = [];
-
-      for (let i = 0; i < totalPages; i++) {
-        const pageLines = lines.slice(i * approxLinesPerPage, (i + 1) * approxLinesPerPage);
-        fullTextByPage.push(`\n--- Page ${i + 1} ---\n${pageLines.join("\n")}`);
-      }
-
-      const finalText = fullTextByPage.join("\n").trim();
-      console.log("✅ Final extracted length:", finalText.length);
-      return finalText;
-    }
-
-    if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-      const result = await mammoth.extractRawText({ buffer });
-      return result.value.trim();
-    }
-
-    if (mimeType === "text/plain") {
-      return buffer.toString("utf8").trim();
-    }
-
-    if (mimeType.startsWith("image")) {
-      const { data } = await Tesseract.recognize(buffer, "eng", {
-        logger: m => console.log("🖼️ OCR progress:", m.progress),
-      });
-      return data.text?.trim() || "[No text extracted from image]";
-    }
-
-    return "Unsupported file type.";
-  } catch (err) {
-    console.error("❌ extractText crashed:", err.message);
-    return "[Extraction failed]";
-  }
+    });
+  });
 };
+
 
 
 

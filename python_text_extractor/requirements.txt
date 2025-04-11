@@ -1,0 +1,7 @@
+pytesseract
+pdfminer.six
+python-docx
+pandas
+openpyxl
+pillow
+pdf2image
