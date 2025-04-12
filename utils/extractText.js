@@ -5,8 +5,9 @@ const fs = require("fs");
 const path = require("path");
 const { fromPath } = require("pdf2pic");
 const os = require("os");
-const sharp = require("sharp"); // To optimize image before uploading
-const { uploadToFTP } = require("./ftpUploader"); // Ensure FTP uploader is implemented
+const sharp = require("sharp");
+const { uploadToFTP } = require("./ftpUploader");
+const pdf = require("pdf-parse"); // ✅ For dynamic page count
 
 const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
@@ -38,36 +39,34 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
         const tempPdfPath = path.join(os.tmpdir(), `input-${Date.now()}.pdf`);
         fs.writeFileSync(tempPdfPath, buffer);
 
-        // Correct conversion options for pdf2pic
+        // Get total number of pages in PDF
+        const pdfData = await pdf(buffer);
+        const totalPages = pdfData.numpages || 1;
+
+        // Setup pdf2pic
         const convert = fromPath(tempPdfPath, {
-          density: 300, // Higher resolution for OCR accuracy
+          density: 300,
           saveFilename: "ocr-page",
           savePath: os.tmpdir(),
           format: "png",
-          width: 1500, // Larger width for better clarity
-          quality: 100, // Max quality for better OCR results
+          width: 1500,
+          quality: 100,
         });
-
-        // Get the total pages count
-        const pageInfo = await convert(1, true); // First page for checking total
-        const totalPages = pageInfo.length || 1;  // Default to 1 page if none is detected
 
         const imagePaths = [];
         for (let i = 1; i <= totalPages; i++) {
-          const result = await convert(i); // Convert each page to image
-          imagePaths.push(result.path); // Store the image paths
+          const result = await convert(i);
+          imagePaths.push(result.path);
         }
 
         const ocrTexts = await Promise.all(
           imagePaths.map(async (imgPath) => {
-            // Preprocess image before OCR
             const imgBuffer = await sharp(imgPath)
-              .resize(1500, 1500)  // Improve resolution
-              .grayscale() // Convert to grayscale for clarity
-              .normalize() // Normalize for better contrast
+              .resize(1500)
+              .grayscale()
+              .normalize()
               .toBuffer();
 
-            // Upload image to FTP and OCR using Mistral
             const ftpImagePath = await uploadToFTP(imgBuffer, `ocr-img-${Date.now()}-${path.basename(imgPath)}`);
             const imgUrl = `https://quantumhash.me${ftpImagePath}`;
 
@@ -80,11 +79,10 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
               includeImageBase64: false,
             });
 
-            return ocrRes?.text || ""; // Return OCR result for each image
+            return ocrRes?.text || "";
           })
         );
 
-        // Combine the OCR results from all pages
         return ocrTexts.join("\n--- Page Break ---\n").trim();
       }
     }
