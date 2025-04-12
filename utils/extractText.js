@@ -38,7 +38,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
         const tempPdfPath = path.join(os.tmpdir(), `input-${Date.now()}.pdf`);
         fs.writeFileSync(tempPdfPath, buffer);
 
-        // Corrected conversion options
+        // Correct conversion options for pdf2pic
         const convert = fromPath(tempPdfPath, {
           density: 300, // Higher resolution for OCR accuracy
           saveFilename: "ocr-page",
@@ -48,8 +48,8 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
           quality: 100, // Max quality for better OCR results
         });
 
-        // Convert the first page and check the total number of pages
-        const pageInfo = await convert(1, true);
+        // Get the total pages count
+        const pageInfo = await convert(1, true); // First page for checking total
         const totalPages = pageInfo.length || 1;  // Default to 1 page if none is detected
 
         const imagePaths = [];
