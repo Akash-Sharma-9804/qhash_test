@@ -8,31 +8,40 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
   try {
     // ✅ Use Mistral OCR directly for PDFs and images via public FTP URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
-      const response = await mistral.ocr.process({
-        model: "mistral-ocr-latest",
-        document: {
-          type: "document_url",
-          documentUrl: `https://quantumhash.me${ftpUrl}`,
-        },
-        includeImageBase64: false,
-      });
+      // Construct the full document URL
+      const documentUrl = `https://quantumhash.me${ftpUrl}`;
 
-      const text = response?.text?.trim();
-      return text && text.length > 0 ? text : "[No text extracted]";
+      try {
+        const response = await mistral.ocr.process({
+          model: "mistral-ocr-latest",
+          document: {
+            type: "document_url",
+            documentUrl: documentUrl,
+          },
+          includeImageBase64: false,
+        });
+
+        // Extract and return the text if available
+        const text = response?.text?.trim();
+        return text && text.length > 0 ? text : "[No text extracted]";
+      } catch (ocrError) {
+        console.error("❌ Mistral OCR error:", ocrError.message);
+        return "[Error with OCR extraction]";
+      }
     }
 
-    // ✅ Handle plain text
+    // ✅ Handle plain text (e.g., TXT files)
     if (mimeType === "text/plain") {
       return buffer.toString("utf-8").trim();
     }
 
-    // ✅ Handle Word DOCX
+    // ✅ Handle Word DOCX files
     if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const result = await mammoth.extractRawText({ buffer });
       return result.value.trim();
     }
 
-    // ✅ Handle Excel files
+    // ✅ Handle Excel files (XLSX)
     if (
       mimeType.includes("spreadsheet") ||
       mimeType.includes("excel") ||
