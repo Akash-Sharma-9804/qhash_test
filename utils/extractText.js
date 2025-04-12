@@ -8,8 +8,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
   try {
     // ✅ Use Mistral OCR directly for PDFs and images via public FTP URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
-      // Construct the full document URL
-      const documentUrl = `https://quantumhash.me${ftpUrl}`;
+      const documentUrl = `https://quantumhash.me${ftpUrl}`; // Full public path
 
       try {
         const response = await mistral.ocr.process({
@@ -21,7 +20,6 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
           includeImageBase64: false,
         });
 
-        // Extract and return the text if available
         const text = response?.text?.trim();
         return text && text.length > 0 ? text : "[No text extracted]";
       } catch (ocrError) {
@@ -30,7 +28,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
       }
     }
 
-    // ✅ Handle plain text (e.g., TXT files)
+    // ✅ Handle plain text files (TXT)
     if (mimeType === "text/plain") {
       return buffer.toString("utf-8").trim();
     }
