@@ -38,21 +38,24 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
         const tempPdfPath = path.join(os.tmpdir(), `input-${Date.now()}.pdf`);
         fs.writeFileSync(tempPdfPath, buffer);
 
-        // Increase resolution for better OCR accuracy
+        // Corrected conversion options
         const convert = fromPath(tempPdfPath, {
-          density: 300, // Higher density for better resolution
+          density: 300, // Higher resolution for OCR accuracy
           saveFilename: "ocr-page",
           savePath: os.tmpdir(),
           format: "png",
           width: 1500, // Larger width for better clarity
+          quality: 100, // Max quality for better OCR results
         });
 
-        const totalPages = await convert(1, true).then(info => info.length || 1);
-        const imagePaths = [];
+        // Convert the first page and check the total number of pages
+        const pageInfo = await convert(1, true);
+        const totalPages = pageInfo.length || 1;  // Default to 1 page if none is detected
 
+        const imagePaths = [];
         for (let i = 1; i <= totalPages; i++) {
-          const result = await convert(i);
-          imagePaths.push(result.path);
+          const result = await convert(i); // Convert each page to image
+          imagePaths.push(result.path); // Store the image paths
         }
 
         const ocrTexts = await Promise.all(
