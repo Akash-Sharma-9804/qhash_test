@@ -69,7 +69,7 @@ const uploadToFTP = async (buffer, remoteFileName) => {
     console.log("✅ File uploaded to FTP:", `${remoteDir}/${remoteFileName}`);
 
     // Return the public-facing URL of the uploaded file
-    return `/Quantum_AI/uploads/${remoteFileName}`;
+    return `/Quantum_AI/uploads/fileuploads/files/${remoteFileName}`;
   } catch (err) {
     console.error("❌ FTP Upload Error:", err);
     throw err;
