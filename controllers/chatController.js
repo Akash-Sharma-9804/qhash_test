@@ -126,7 +126,7 @@ exports.getConversationHistory = async (req, res) => {
       console.log("✅ Rows from DB:", rows); // ✅ Should now be an array
   
       if (!rows.length) {
-        return res.status(200).json({ success: false, message: "No history found." });
+        return res.status(200).json({ success: false, history: [] });
       }
   
       return res.status(200).json({ success: true, history: rows });
