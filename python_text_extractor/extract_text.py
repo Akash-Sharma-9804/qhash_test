@@ -115,8 +115,6 @@ import json
 import pytesseract
 from PIL import Image
 from io import BytesIO
-from pdfminer.high_level import extract_pages
-from pdfminer.layout import LTTextContainer
 from docx import Document
 import pandas as pd
 import base64
@@ -160,24 +158,26 @@ def extract_pdf_pagewise(content):
         doc = fitz.open(tmp.name)
 
         for i, page in enumerate(doc, start=1):
-            # --- 1. Text extraction from vector/text layer
-            text = page.get_text().strip()
-
-            # --- 2. OCR extraction from image rendering
-            pix = page.get_pixmap(dpi=300)
-            img = Image.open(BytesIO(pix.tobytes("png"))).convert("RGB")
-            ocr_text = pytesseract.image_to_string(img).strip()
-
-            # --- 3. Combine both results
             page_text = f"\n--- Page {i} ---\n"
-            if text:
-                page_text += f"[PDF Text]\n{text}"
-            if ocr_text:
-                page_text += f"\n[OCR Text]\n{ocr_text}"
 
-            # --- 4. Handle case when both are empty
-            if not text and not ocr_text:
-                page_text += "[No text found]"
+            try:
+                # Step 1: Extract native text
+                text = page.get_text().strip()
+
+                # Step 2: Run OCR only if native text is too short or missing
+                if not text or len(text) < 50:
+                    pix = page.get_pixmap(dpi=150)  # Lower DPI = faster
+                    img = Image.open(BytesIO(pix.tobytes("png"))).convert("RGB")
+                    ocr_text = pytesseract.image_to_string(img).strip()
+                    if ocr_text:
+                        page_text += f"[OCR Text]\n{ocr_text}"
+                    else:
+                        page_text += "[No text found]"
+                else:
+                    page_text += f"[PDF Text]\n{text}"
+
+            except Exception as e:
+                page_text += f"[Error extracting page {i}: {str(e)}]"
 
             text_by_page.append(page_text)
 
@@ -203,7 +203,6 @@ def main():
         else:
             result = "[Unsupported file type]"
 
-        # ✅ Only send valid JSON to stdout
         print(json.dumps({"text": result}))
 
     except Exception as e:
@@ -212,4 +211,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
