@@ -6,7 +6,7 @@ const path = require("path");
 const { fromPath } = require("pdf2pic");
 const os = require("os");
 const sharp = require("sharp"); // To optimize image before uploading
-const { uploadToFTP } = require("./ftpUploader"); // Make sure this is implemented
+const { uploadToFTP } = require("./ftpUploader"); // Ensure FTP uploader is implemented
 
 const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
@@ -14,7 +14,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
   try {
     // ✅ TEXT-BASED PDFs OR IMAGES DIRECTLY FROM FTP URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
-      // Try direct OCR via mistral first
+      // Try direct OCR via Mistral first
       try {
         const directResponse = await mistral.ocr.process({
           model: "mistral-ocr-latest",
@@ -27,23 +27,24 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
 
         const text = directResponse?.text?.trim();
         if (text && text.length > 30) {
-          return text;
+          return text; // Return early if OCR successful
         }
       } catch (err) {
-        console.warn("📎 Fallback to OCR from images due to mistral URL OCR failure.");
+        console.warn("📎 Fallback to OCR from images due to Mistral URL OCR failure.");
       }
 
-      // ✅ FALLBACK: CONVERT PDF PAGES TO IMAGES, UPLOAD TO FTP, OCR EACH
+      // ✅ FALLBACK: CONVERT PDF PAGES TO IMAGES, UPLOAD TO FTP, OCR EACH PAGE
       if (mimeType === "application/pdf") {
         const tempPdfPath = path.join(os.tmpdir(), `input-${Date.now()}.pdf`);
         fs.writeFileSync(tempPdfPath, buffer);
 
+        // Increase resolution for better OCR accuracy
         const convert = fromPath(tempPdfPath, {
-          density: 150,
+          density: 300, // Higher density for better resolution
           saveFilename: "ocr-page",
           savePath: os.tmpdir(),
           format: "png",
-          width: 1200,
+          width: 1500, // Larger width for better clarity
         });
 
         const totalPages = await convert(1, true).then(info => info.length || 1);
@@ -56,10 +57,17 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
 
         const ocrTexts = await Promise.all(
           imagePaths.map(async (imgPath) => {
-            // Optimize image before upload
-            const imgBuffer = await sharp(imgPath).png().toBuffer();
+            // Preprocess image before OCR
+            const imgBuffer = await sharp(imgPath)
+              .resize(1500, 1500)  // Improve resolution
+              .grayscale() // Convert to grayscale for clarity
+              .normalize() // Normalize for better contrast
+              .toBuffer();
+
+            // Upload image to FTP and OCR using Mistral
             const ftpImagePath = await uploadToFTP(imgBuffer, `ocr-img-${Date.now()}-${path.basename(imgPath)}`);
             const imgUrl = `https://quantumhash.me${ftpImagePath}`;
+
             const ocrRes = await mistral.ocr.process({
               model: "mistral-ocr-latest",
               document: {
@@ -68,10 +76,12 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
               },
               includeImageBase64: false,
             });
-            return ocrRes?.text || "";
+
+            return ocrRes?.text || ""; // Return OCR result for each image
           })
         );
 
+        // Combine the OCR results from all pages
         return ocrTexts.join("\n--- Page Break ---\n").trim();
       }
     }
