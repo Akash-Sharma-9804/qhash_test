@@ -1,35 +1,93 @@
 const { Mistral } = require("@mistralai/mistralai");
- 
 const mammoth = require("mammoth");
 const xlsx = require("xlsx");
+const fs = require("fs");
+const path = require("path");
+const { fromPath } = require("pdf2pic");
+const os = require("os");
+const sharp = require("sharp"); // To optimize image before uploading
+const { uploadToFTP } = require("./ftpUploader"); // Make sure this is implemented
 
 const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
 const extractText = async (buffer, mimeType, ftpUrl) => {
   try {
+    // ✅ TEXT-BASED PDFs OR IMAGES DIRECTLY FROM FTP URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
-      // OCR using mistral on FTP public URL
-      const ocrResponse = await mistral.ocr.process({
-        model: "mistral-ocr-latest",
-        document: {
-          type: "document_url",
-          documentUrl: `https://quantumhash.me${ftpUrl}`, // 🔁 Adjust domain
-        },
-        includeImageBase64: false,
-      });
+      // Try direct OCR via mistral first
+      try {
+        const directResponse = await mistral.ocr.process({
+          model: "mistral-ocr-latest",
+          document: {
+            type: "document_url",
+            documentUrl: `https://quantumhash.me${ftpUrl}`,
+          },
+          includeImageBase64: false,
+        });
 
-      return ocrResponse?.text || "[No text extracted]";
+        const text = directResponse?.text?.trim();
+        if (text && text.length > 30) {
+          return text;
+        }
+      } catch (err) {
+        console.warn("📎 Fallback to OCR from images due to mistral URL OCR failure.");
+      }
+
+      // ✅ FALLBACK: CONVERT PDF PAGES TO IMAGES, UPLOAD TO FTP, OCR EACH
+      if (mimeType === "application/pdf") {
+        const tempPdfPath = path.join(os.tmpdir(), `input-${Date.now()}.pdf`);
+        fs.writeFileSync(tempPdfPath, buffer);
+
+        const convert = fromPath(tempPdfPath, {
+          density: 150,
+          saveFilename: "ocr-page",
+          savePath: os.tmpdir(),
+          format: "png",
+          width: 1200,
+        });
+
+        const totalPages = await convert(1, true).then(info => info.length || 1);
+        const imagePaths = [];
+
+        for (let i = 1; i <= totalPages; i++) {
+          const result = await convert(i);
+          imagePaths.push(result.path);
+        }
+
+        const ocrTexts = await Promise.all(
+          imagePaths.map(async (imgPath) => {
+            // Optimize image before upload
+            const imgBuffer = await sharp(imgPath).png().toBuffer();
+            const ftpImagePath = await uploadToFTP(imgBuffer, `ocr-img-${Date.now()}-${path.basename(imgPath)}`);
+            const imgUrl = `https://quantumhash.me${ftpImagePath}`;
+            const ocrRes = await mistral.ocr.process({
+              model: "mistral-ocr-latest",
+              document: {
+                type: "document_url",
+                documentUrl: imgUrl,
+              },
+              includeImageBase64: false,
+            });
+            return ocrRes?.text || "";
+          })
+        );
+
+        return ocrTexts.join("\n--- Page Break ---\n").trim();
+      }
     }
 
+    // ✅ PLAIN TEXT
     if (mimeType === "text/plain") {
       return buffer.toString("utf-8").trim();
     }
 
+    // ✅ WORD DOCX
     if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const result = await mammoth.extractRawText({ buffer });
       return result.value.trim();
     }
 
+    // ✅ EXCEL
     if (
       mimeType.includes("spreadsheet") ||
       mimeType.includes("excel") ||
