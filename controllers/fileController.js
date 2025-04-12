@@ -130,7 +130,8 @@
 
 const db = require("../config/db");
 const uploadToFTP = require("../utils/ftpUploader");
-const { spawn } = require("child_process");
+const extractText = require("../utils/extractText");
+
 
 // const extractText = async (buffer, mimeType) => {
 //   return new Promise((resolve, reject) => {
@@ -185,72 +186,7 @@ const { spawn } = require("child_process");
 
  
 
-const extractText = async (buffer, mimeType) => {
-  return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-    const pythonProcess = spawn("python3", ["python_text_extractor/extract_text.py"]);
-
-    const input = JSON.stringify({
-      buffer: buffer.toString("base64"),
-      mimeType,
-    });
-
-    let result = "";
-    let error = "";
-
-    // Handle stdout
-    pythonProcess.stdout.on("data", (data) => {
-      result += data.toString();
-    });
-
-    // Handle stderr
-    pythonProcess.stderr.on("data", (data) => {
-      error += data.toString();
-    });
-
-    // Handle stdin errors (like EPIPE)
-    pythonProcess.stdin.on("error", (err) => {
-      if (err.code === "EPIPE") {
-        console.error("❌ EPIPE error: Python process closed before input was sent.");
-      } else {
-        console.error("❌ Stdin write error:", err.message);
-      }
-    });
-
-    // Write input to Python
-    try {
-      pythonProcess.stdin.write(input);
-      pythonProcess.stdin.end();
-    } catch (err) {
-      console.error("❌ Failed to write to Python stdin:", err.message);
-      return reject(new Error("Failed to communicate with Python script"));
-    }
-
-    // Handle Python process close
-    pythonProcess.on("close", (code) => {
-      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-      console.log(`⏱️ Python process finished in ${duration}s`);
-
-      if (code !== 0) {
-        console.error("❌ Python process exited with code", code);
-        console.error("📄 Python stderr:", error);
-        return reject(new Error(error || "Python script failed"));
-      }
-
-      try {
-        const output = JSON.parse(result);
-        if (output.error) {
-          return reject(new Error(output.error));
-        }
-        resolve(output.text);
-      } catch (err) {
-        console.error("❌ JSON parse error:", err.message);
-        console.error("🔎 Raw result from Python:", result);
-        reject(new Error("Invalid JSON from Python: " + err.message));
-      }
-    });
-  });
-};
+ 
 
 
 
@@ -373,7 +309,9 @@ exports.uploadFiles = async (req, res) => {
       let ftpPath = "";
 
       try {
-        extractedText = await extractText(buffer, file.mimetype);
+        ftpPath = await uploadToFTP(buffer, fileName);
+extractedText = await extractText(buffer, file.mimetype, ftpPath);
+
         console.log("🧾 Pages Extracted:\n", extractedText.split("\n--- Page").length - 1);
 
 

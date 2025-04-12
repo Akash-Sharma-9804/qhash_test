@@ -27,21 +27,16 @@
 # ✅ Use a Node.js image based on Debian (for apt compatibility)
 FROM node:18-bullseye
 
-# ✅ Install Python, Tesseract OCR, and image processing dependencies
+# ✅ Install only necessary system packages (for image/PDF handling if needed)
 RUN apt-get update --fix-missing && \
     apt-get install -y \
-    python3 \
-    python3-pip \
-    tesseract-ocr \
-    tesseract-ocr-eng \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
     git \
     curl \
-    && pip3 install --upgrade pip && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ✅ Set working directory inside container
 WORKDIR /app
@@ -49,13 +44,10 @@ WORKDIR /app
 # ✅ Copy all project files into the container
 COPY . .
 
-# ✅ Install Python dependencies from your `requirements.txt`
-RUN pip3 install --no-cache-dir -r python_text_extractor/requirements.txt
-
 # ✅ Install Node.js dependencies
 RUN npm install
 
-# ✅ Expose the port your server listens on (change if using a different port)
+# ✅ Expose the port your server listens on
 EXPOSE 3000
 
 # ✅ Start the Node.js backend
