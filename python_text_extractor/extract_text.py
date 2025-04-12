@@ -164,15 +164,19 @@ def extract_pdf_pagewise(content):
                 # Step 1: Extract native text
                 text = page.get_text().strip()
 
-                # Step 2: Run OCR only if native text is too short or missing
+                # Step 2: Run OCR if needed
                 if not text or len(text) < 50:
-                    pix = page.get_pixmap(dpi=150)  # Lower DPI = faster
-                    img = Image.open(BytesIO(pix.tobytes("png"))).convert("RGB")
-                    ocr_text = pytesseract.image_to_string(img).strip()
+                    pix = page.get_pixmap(dpi=300)  # High DPI for better clarity
+                    img = Image.open(BytesIO(pix.tobytes("png"))).convert("L")  # Grayscale
+
+                    # Optional: preprocess image for better OCR
+                    img = img.point(lambda x: 0 if x < 180 else 255, '1')  # Binarize
+
+                    ocr_text = pytesseract.image_to_string(img, config='--psm 6').strip()
                     if ocr_text:
                         page_text += f"[OCR Text]\n{ocr_text}"
                     else:
-                        page_text += "[No text found]"
+                        page_text += "[OCR failed or no readable text]"
                 else:
                     page_text += f"[PDF Text]\n{text}"
 
