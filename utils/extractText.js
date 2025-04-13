@@ -50,7 +50,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
           },
           includeImageBase64: false,
         });
-
+        console.log("📥 Mistral OCR full response:", response);
         const text = response?.text?.trim();
         return text && text.length > 0 ? text : "[No text extracted]";
       } catch (ocrError) {
