@@ -58,7 +58,7 @@ const uploadToFTP = async (buffer, remoteFileName) => {
     });
 
     // Define and navigate to the target directory
-    const remoteDir = process.env.FTP_REMOTE_DIR || "/public_html/Quantum_AI/uploads/fileuploads/files";
+    const remoteDir = process.env.FTP_REMOTE_DIR || "/fileuploads/files";
     await client.ensureDir(remoteDir); // Creates the folder if it doesn't exist
     await client.cd(remoteDir);        // Changes into the target folder
 
