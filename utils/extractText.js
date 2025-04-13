@@ -6,39 +6,37 @@ const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
 const extractText = async (buffer, mimeType, ftpUrl) => {
   try {
-    // ✅ Use Mistral OCR directly for PDFs and images via public FTP URL
+    // ✅ OCR for PDFs and images using public URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
-      const documentUrl = `https://quantumhash.me${ftpUrl}`; // Full public URL
-
+      const documentUrl = `https://quantumhash.me${ftpUrl}`;
       console.log("🔗 Document URL:", documentUrl);
 
       try {
-        const response = await mistral.chat({
-          model: "mistral-small",
-          messages: [
-            {
-              role: "user",
-              content: `Extract the text from this document: ${documentUrl}`,
-            },
-          ],
+        const response = await mistral.ocr.process({
+          model: "mistral-ocr-latest",
+          document: {
+            type: "document_url",
+            documentUrl: documentUrl,
+          },
+          includeImageBase64: false,
         });
 
-        console.log("📥 Mistral Chat Response:", response);
+        console.log("📥 Mistral OCR full response:", response);
 
-        const text = response?.choices?.[0]?.message?.content?.trim();
-        return text || "[No text extracted]";
+        const text = response?.text?.trim();
+        return text && text.length > 0 ? text : "[No text extracted]";
       } catch (ocrError) {
         console.error("❌ Mistral OCR error:", ocrError.message);
         return "[Error with OCR extraction]";
       }
     }
 
-    // ✅ Handle plain text files
+    // ✅ Handle TXT files
     if (mimeType === "text/plain") {
       return buffer.toString("utf-8").trim();
     }
 
-    // ✅ Handle DOCX
+    // ✅ Handle DOCX files
     if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const result = await mammoth.extractRawText({ buffer });
       return result.value.trim();
