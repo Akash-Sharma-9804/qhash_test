@@ -22,6 +22,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
         });
 
         console.log("📥 Mistral OCR full response:", response);
+        console.log("📥 Full OCR response:", JSON.stringify(response, null, 2)); 
 
         const text = response?.text?.trim();
         return text && text.length > 0 ? text : "[No text extracted]";
