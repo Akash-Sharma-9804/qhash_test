@@ -9,7 +9,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
     // ✅ Use Mistral OCR directly for PDFs and images via public FTP URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
       const documentUrl = `https://quantumhash.me${ftpUrl}`; // Full public path
-
+      console.log("url",documentUrl);
       try {
         const response = await mistral.ocr.process({
           model: "mistral-ocr-latest",
