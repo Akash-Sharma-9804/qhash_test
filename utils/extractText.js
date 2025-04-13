@@ -1,8 +1,9 @@
-const { Mistral } = require("@mistralai/mistralai");
+const fs = require("fs");
+const path = require("path");
 const mammoth = require("mammoth");
 const xlsx = require("xlsx");
-
-const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
+const { basic_ftp } = require("basic-ftp");
+const { mistral } = require("@mistralai/mistralai");
 
 const extractText = async (buffer, mimeType, ftpUrl) => {
   try {
@@ -22,10 +23,22 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
         });
 
         console.log("📥 Mistral OCR full response:", response);
-        console.log("📥 Full OCR response:", JSON.stringify(response, null, 2)); 
 
-        const text = response?.text?.trim();
-        return text && text.length > 0 ? text : "[No text extracted]";
+        // Extract text from each page in the response
+        let extractedText = "";
+        if (response.pages && Array.isArray(response.pages)) {
+          response.pages.forEach((page) => {
+            if (page.markdown) {
+              extractedText += page.markdown.trim() + "\n\n"; // Concatenate text from each page
+            }
+          });
+        }
+
+        // Clean up any unwanted parts (like image tags) if necessary
+        extractedText = extractedText.replace(/!\[.*?\]\(.*?\)/g, ""); // Remove image tags
+
+        // Return the extracted text
+        return extractedText.length > 0 ? extractedText : "[No text extracted]";
       } catch (ocrError) {
         console.error("❌ Mistral OCR error:", ocrError.message);
         return "[Error with OCR extraction]";
@@ -66,4 +79,3 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
   }
 };
 
-module.exports = extractText;
