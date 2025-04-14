@@ -343,7 +343,7 @@ exports.askChatbot = async (req, res) => {
             .flat()
             .filter(m => m?.content);
 
-        // Step 4: Add system prompt
+        // Step 4: Add system prompt at the start
         const currentDate = new Date().toLocaleDateString('en-US', {
             year: 'numeric', month: 'long', day: 'numeric'
         });
@@ -357,74 +357,64 @@ exports.askChatbot = async (req, res) => {
                 `Your current knowledge includes everything provided by the user up to ${currentDate}.`
         };
 
-        chatHistory.unshift(systemPrompt);
+        const finalMessages = [systemPrompt];
 
-        // Step 5: Handle uploaded files
-        let filePaths = [];
-        let fileNames = [];
-
-        if (Array.isArray(req.body.uploaded_file_metadata) && req.body.uploaded_file_metadata.length > 0) {
-            filePaths = req.body.uploaded_file_metadata.map(f => f.file_path);
-            fileNames = req.body.uploaded_file_metadata.map(f => f.file_name);
-        }
-
-        // Step 6: Construct full user message
-        let fullUserMessage = userMessage || "";
-        if (fileNames.length > 0) {
-            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
-        }
-
-        console.log("🧾 Full User Message (with filenames):", fullUserMessage);
-        console.log("📁 File Paths:", filePaths);
-
-
-        console.log("🔍 Extracted Summary being passed to askChatbot:", extracted_summary);
-
-        // ✅ Step 7: Inject extracted summary BEFORE user prompt
+        // ✅ Step 5: Inject summary right after system prompt
         if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
-            chatHistory.push({
+            finalMessages.push({
                 role: "assistant",
-                content:
-                    `📄 Here's the extracted content from the uploaded files, organized by page. Use this when answering:\n\n${extracted_summary}`
+                content: `📄 Here's the extracted content from the uploaded files, organized by page:\n\n${extracted_summary}`
             });
         }
 
-        // ✅ Step 8: Push actual user prompt
-        chatHistory.push({
+        // ✅ Step 6: Add full previous history
+        finalMessages.push(...chatHistory);
+
+        // ✅ Step 7: Add current user message + uploaded files
+        let fullUserMessage = userMessage || "";
+        if (Array.isArray(req.body.uploaded_file_metadata) && req.body.uploaded_file_metadata.length > 0) {
+            const fileNames = req.body.uploaded_file_metadata.map(f => f.file_name);
+            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
+        }
+
+        finalMessages.push({
             role: "user",
-            content: fullUserMessage,
+            content: fullUserMessage
         });
 
-        // Step 9: Send to AI
+        console.log("🧠 Final Prompt to AI:", finalMessages);
+
+        // Step 8: Send to AI
         let aiResponse = "";
         if (process.env.USE_OPENAI === "true") {
             const openaiResponse = await openai.chat.completions.create({
                 model: "gpt-4",
-                messages: chatHistory,
+                messages: finalMessages,
             });
             aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         } else {
             const deepseekResponse = await deepseek.chat.completions.create({
                 model: "deepseek-chat",
-                messages: chatHistory,
+                messages: finalMessages,
             });
             aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
 
         console.log("🤖 AI Response:", aiResponse);
 
-        // Step 10: Save to DB
+        // Step 9: Save to DB
+        const filePaths = (req.body.uploaded_file_metadata || []).map(f => f.file_path);
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
             [conversation_id, fullUserMessage, aiResponse, filePaths.join(","), extracted_summary || null]
         );
 
-        // Step 11: Return response
+        // Step 10: Return response
         res.json({
             success: true,
             conversation_id,
             response: aiResponse,
-            uploaded_files: fileNames,
+            uploaded_files: (req.body.uploaded_file_metadata || []).map(f => f.file_name),
         });
 
     } catch (error) {
@@ -432,6 +422,7 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
 
 
