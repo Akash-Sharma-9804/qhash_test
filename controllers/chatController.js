@@ -479,22 +479,19 @@ finalMessages.push({
 
         // Step 9: Enhanced database storage
         const filePaths = (req.body.uploaded_file_metadata || []).map(f => f.file_path);
-        await db.query(
-            `INSERT INTO chat_history 
-             (conversation_id, user_message, response, created_at, file_path, extracted_text, message_context) 
-             VALUES (?, ?, ?, NOW(), ?, ?, ?)`,
-            [
-                conversation_id, 
-                fullUserMessage, 
-                aiResponse, 
-                filePaths.join(","), 
-                extracted_summary || null,
-                JSON.stringify({
-                    systemPrompt: systemPrompt.content,
-                    historyLength: recentHistory.length
-                })
-            ]
-        );
+       // Simplified and optimized database insertion
+await db.query(
+    `INSERT INTO chat_history 
+     (conversation_id, user_message, response, created_at, file_path, extracted_text) 
+     VALUES (?, ?, ?, NOW(), ?, ?)`,
+    [
+        conversation_id, 
+        fullUserMessage, 
+        aiResponse, 
+        filePaths.join(","), 
+        extracted_summary || null
+    ]
+);
 
         // Step 10: Return enhanced response
         res.json({
