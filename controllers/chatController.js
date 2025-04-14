@@ -421,23 +421,24 @@ exports.askChatbot = async (req, res) => {
         finalMessages.push(...recentHistory);
 
         // Step 7: Enhanced current message handling
-        let fullUserMessage = userMessage || "";
-        const fileContext = [];
-        
-        if (Array.isArray(req.body.uploaded_file_metadata) {
-            req.body.uploaded_file_metadata.forEach(f => {
-                fileContext.push(`- ${f.file_name} (${f.file_size ? (f.file_size / 1024).toFixed(1) + 'KB' : 'size unknown'})`);
-            });
-        }
+      // Step 7: Enhanced current message handling
+let fullUserMessage = userMessage || "";
+const fileContext = [];
 
-        if (fileContext.length > 0) {
-            fullUserMessage += `\n\n[Attached files:\n${fileContext.join('\n')}]`;
-        }
+if (Array.isArray(req.body.uploaded_file_metadata)) {
+    req.body.uploaded_file_metadata.forEach(f => {
+        fileContext.push(`- ${f.file_name} (${f.file_size ? (f.file_size / 1024).toFixed(1) + 'KB' : 'size unknown'})`);
+    });
+}
 
-        finalMessages.push({
-            role: "user",
-            content: fullUserMessage
-        });
+if (fileContext.length > 0) {
+    fullUserMessage += `\n\n[Attached files:\n${fileContext.join('\n')}]`;
+}
+
+finalMessages.push({
+    role: "user",
+    content: fullUserMessage
+});
 
         console.log("🧠 Final Prompt to AI:", JSON.stringify(finalMessages, null, 2));
 
