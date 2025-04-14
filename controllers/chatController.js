@@ -301,10 +301,12 @@ exports.askChatbot = async (req, res) => {
     let { userMessage, conversation_id, extracted_summary } = req.body;
     const user_id = req.user?.user_id;
 
+    // Authentication check
     if (!user_id) {
         return res.status(401).json({ error: "Unauthorized: User ID not found." });
     }
 
+    // Validation
     if (!userMessage && !extracted_summary) {
         return res.status(400).json({ error: "User message or extracted summary is required" });
     }
@@ -319,7 +321,7 @@ exports.askChatbot = async (req, res) => {
             conversation_id = conversationResult.insertId;
         }
 
-        // Step 2: Check ownership
+        // Step 2: Verify conversation ownership
         const [existingConversation] = await db.query(
             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
             [conversation_id, user_id]
@@ -328,189 +330,147 @@ exports.askChatbot = async (req, res) => {
             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
         }
 
-        // Step 3: Fetch chat history with more context
-        const [historyResultsRaw] = await db.query(
+        // Step 3: Fetch conversation history with document context
+        const [historyResults] = await db.query(
             `SELECT 
                 user_message AS message, 
                 response, 
                 extracted_text,
-                file_path,
-                created_at
+                file_path
              FROM chat_history 
              WHERE conversation_id = ? 
              ORDER BY created_at ASC`,
             [conversation_id]
         );
 
-        const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
-        
-        // Build conversation history with context awareness
+        // Step 4: Build conversation context
         const chatHistory = [];
-        let lastExtractedText = null;
-        
+        let activeDocument = null;
+        let candidateName = null;
+
         historyResults.forEach(chat => {
-            // Add user message
-            if (chat.message) {
-                chatHistory.push({ role: "user", content: chat.message });
-            }
-            
-            // Add assistant response
-            if (chat.response) {
-                chatHistory.push({ role: "assistant", content: chat.response });
-            }
-            
-            // Track the most recent extracted text
+            // Track active document
             if (chat.extracted_text) {
-                lastExtractedText = chat.extracted_text;
+                activeDocument = {
+                    content: chat.extracted_text,
+                    filePaths: chat.file_path ? chat.file_path.split(',') : []
+                };
+                
+                // Extract candidate name if available
+                const nameMatch = chat.extracted_text.match(/Candidate['’]s Name:\s*([^\n|]+)/i);
+                if (nameMatch) candidateName = nameMatch[1].trim();
             }
+
+            // Build message history
+            if (chat.message) chatHistory.push({ role: "user", content: chat.message });
+            if (chat.response) chatHistory.push({ role: "assistant", content: chat.response });
         });
 
-        // Step 4: Enhanced system prompt with conversation management
+        // Step 5: Handle new document uploads
+        if (extracted_summary && extracted_summary !== "No readable content") {
+            activeDocument = {
+                content: extracted_summary,
+                filePaths: (req.body.uploaded_file_metadata || []).map(f => f.file_path)
+            };
+            
+            // Extract candidate name from new document
+            const nameMatch = extracted_summary.match(/Candidate['']s Name:\s*([^\n|]+)/i);
+            if (nameMatch) candidateName = nameMatch[1].trim();
+        }
+
+        // Step 6: Create intelligent system prompt
         const currentDate = new Date().toLocaleDateString('en-US', {
             year: 'numeric', month: 'long', day: 'numeric'
         });
 
         const systemPrompt = {
             role: "system",
-            content:
-                `You are Quantumhash, an intelligent AI assistant. Follow these guidelines:\n` +
-                `1. Maintain full context of the ongoing conversation\n` +
-                `2. Remember all previously discussed topics in this chat\n` +
-                `3. For file-related questions, reference the extracted content when available\n` +
-                `4. If a question refers to previous messages, connect it to the relevant context\n` +
-                `5. When unsure, ask clarifying questions\n` +
-                `Current date: ${currentDate}\n\n` +
-                `Conversation context:\n` +
-                `- User ID: ${user_id}\n` +
-                `- Conversation ID: ${conversation_id}\n` +
-                `${lastExtractedText ? '- Document content is available for reference' : ''}`
+            content: `You are an expert document assistant. Follow these rules:
+1. Current Date: ${currentDate}
+2. ${activeDocument ? 'DOCUMENT AVAILABLE - Reference it for details' : 'NO DOCUMENT - Ask user to upload if needed'}
+3. ${candidateName ? `Candidate: ${candidateName}` : 'No candidate identified'}
+4. For personal data (DOB, ID numbers):
+   - Only share if explicitly found in documents
+   - Never guess or approximate
+5. When unsure:
+   - Specify what's missing
+   - Guide user how to provide it`
         };
 
-        const finalMessages = [systemPrompt];
+        // Step 7: Construct final message payload
+        const finalMessages = [systemPrompt, ...chatHistory.slice(-20)]; // Last 10 exchanges
 
-        // Step 5: Smarter document context injection
-        const hasExistingSummary = historyResults.some(chat => chat.extracted_text === extracted_summary);
-        
-        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
-            if (!hasExistingSummary) {
-                // For new documents, provide full context
-                finalMessages.push({
-                    role: "assistant",
-                    content: `📄 Document content available for reference (${extracted_summary.length.toLocaleString()} characters)`
-                });
-                
-                // Store the full content in the lastExtractedText variable
-                lastExtractedText = extracted_summary;
-            }
-            
-            // Always add a condensed version of the document to the context
-            const condensedSummary = extracted_summary.length > 2000 
-                ? `${extracted_summary.substring(0, 2000)}... [document continues]`
-                : extracted_summary;
-                
+        // Add document context if available
+        if (activeDocument) {
             finalMessages.push({
                 role: "system",
-                content: `Current document context:\n${condensedSummary}`
+                content: `DOCUMENT EXCERPTS:\n${activeDocument.content.substring(0, 2000)}${activeDocument.content.length > 2000 ? '...' : ''}`
             });
         }
 
-        // Step 6: Add conversation history with context window management
-        const MAX_HISTORY_LENGTH = 20; // Limit to last 20 exchanges
-        const recentHistory = chatHistory.slice(-MAX_HISTORY_LENGTH * 2); // Multiply by 2 for user/assistant pairs
-        
-        finalMessages.push(...recentHistory);
+        // Add current message with file context
+        let fullUserMessage = userMessage || "";
+        if (req.body.uploaded_file_metadata?.length > 0) {
+            fullUserMessage += `\n[Attached: ${req.body.uploaded_file_metadata.map(f => f.file_name).join(', ')}]`;
+        }
+        finalMessages.push({ role: "user", content: fullUserMessage });
 
-        // Step 7: Enhanced current message handling
-      // Step 7: Enhanced current message handling
-let fullUserMessage = userMessage || "";
-const fileContext = [];
-
-if (Array.isArray(req.body.uploaded_file_metadata)) {
-    req.body.uploaded_file_metadata.forEach(f => {
-        fileContext.push(`- ${f.file_name} (${f.file_size ? (f.file_size / 1024).toFixed(1) + 'KB' : 'size unknown'})`);
-    });
-}
-
-if (fileContext.length > 0) {
-    fullUserMessage += `\n\n[Attached files:\n${fileContext.join('\n')}]`;
-}
-
-finalMessages.push({
-    role: "user",
-    content: fullUserMessage
-});
-
-        console.log("🧠 Final Prompt to AI:", JSON.stringify(finalMessages, null, 2));
-
-        // Step 8: Enhanced AI response generation
+        // Step 8: Generate AI response
         let aiResponse = "";
-        const aiOptions = {
-            model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
-            messages: finalMessages,
-            temperature: 0.7,
-            max_tokens: 1500,
-            top_p: 0.9,
-            frequency_penalty: 0.2, // Slightly reduce repetition
-            presence_penalty: 0.2   // Slightly encourage new topics
-        };
-
         try {
+            const aiConfig = {
+                model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
+                messages: finalMessages,
+                temperature: 0.7,
+                max_tokens: 1500
+            };
+
             const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
-            const aiResult = await aiProvider.chat.completions.create(aiOptions);
-            
+            const aiResult = await aiProvider.chat.completions.create(aiConfig);
             aiResponse = aiResult.choices?.[0]?.message?.content || "I couldn't generate a response. Please try again.";
-            
-            // Post-process the response for better conversation flow
-            if (lastExtractedText && userMessage.toLowerCase().match(/(page|section|part)\s+\d+/i)) {
-                const pageMatch = userMessage.match(/(page|section|part)\s+(\d+)/i);
-                if (pageMatch) {
-                    const pageNum = pageMatch[2];
-                    if (!aiResponse.includes(pageNum) && !aiResponse.includes("page")) {
-                        aiResponse = `Regarding page ${pageNum}:\n${aiResponse}\n\n[If this doesn't answer your question about page ${pageNum}, please provide more details]`;
-                    }
-                }
+
+            // Enhance specific response types
+            if (userMessage.toLowerCase().includes('date of birth') && activeDocument) {
+                const dobMatch = activeDocument.content.match(/date of birth[:]?\s*([^\n]+)/i);
+                aiResponse = dobMatch 
+                    ? `The document shows date of birth as: ${dobMatch[1].trim()}`
+                    : "I checked the document but couldn't find a date of birth. It might use different wording like 'DOB' or be in another section.";
             }
         } catch (error) {
             console.error("AI API error:", error);
-            aiResponse = "I'm having trouble processing your request. Please try again later.";
+            aiResponse = "I'm experiencing technical difficulties. Please try again later.";
         }
 
-        console.log("🤖 AI Response:", aiResponse);
+        // Step 9: Save conversation
+        await db.query(
+            `INSERT INTO chat_history 
+             (conversation_id, user_message, response, created_at, file_path, extracted_text) 
+             VALUES (?, ?, ?, NOW(), ?, ?)`,
+            [
+                conversation_id, 
+                fullUserMessage, 
+                aiResponse, 
+                (req.body.uploaded_file_metadata || []).map(f => f.file_path).join(','), 
+                extracted_summary || null
+            ]
+        );
 
-        // Step 9: Enhanced database storage
-        const filePaths = (req.body.uploaded_file_metadata || []).map(f => f.file_path);
-       // Simplified and optimized database insertion
-await db.query(
-    `INSERT INTO chat_history 
-     (conversation_id, user_message, response, created_at, file_path, extracted_text) 
-     VALUES (?, ?, ?, NOW(), ?, ?)`,
-    [
-        conversation_id, 
-        fullUserMessage, 
-        aiResponse, 
-        filePaths.join(","), 
-        extracted_summary || null
-    ]
-);
-
-        // Step 10: Return enhanced response
+        // Step 10: Return response
         res.json({
             success: true,
             conversation_id,
             response: aiResponse,
-            uploaded_files: (req.body.uploaded_file_metadata || []).map(f => f.file_name),
             context: {
-                history_items: recentHistory.length / 2,
-                document_available: !!lastExtractedText
+                document_available: !!activeDocument,
+                candidate_name: candidateName
             }
         });
 
     } catch (error) {
-        console.error("❌ askChatbot error:", error.stack || error.message);
+        console.error("❌ Chat error:", error.stack || error.message);
         res.status(500).json({ 
-            error: "Internal server error", 
-            details: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            error: "Internal server error",
+            details: process.env.NODE_ENV === 'development' ? error.message : null
         });
     }
 };
