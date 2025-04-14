@@ -328,7 +328,7 @@ exports.askChatbot = async (req, res) => {
             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
         }
 
-        // Step 3: Fetch chat history
+        // Step 3: Fetch the chat history from the current conversation only
         const [historyResultsRaw] = await db.query(
             "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
             [conversation_id]
@@ -352,14 +352,13 @@ exports.askChatbot = async (req, res) => {
             role: "system",
             content:
                 `You are Quantumhash, an intelligent AI developed by the Quantumhash team in 2024.\n\n` +
-                `Your responses should be based on the user's uploaded documents, especially using extracted summaries broken down by page.\n` +
-                `Always answer based on that context when users ask about specific pages or sections. If the content isn’t available, say “Not available in the provided content.”\n\n` +
-                `Your current knowledge includes everything provided by the user up to ${currentDate}.`
+                `Your responses should be based on the conversation history for this particular chat only. If you do not have enough context, you should say “I don’t have enough context to answer that.”\n` +
+                `Your current knowledge includes everything discussed in this conversation up to ${currentDate}.`
         };
 
         const finalMessages = [systemPrompt];
 
-        // ✅ Step 5: Inject summary right after system prompt
+        // ✅ Step 5: Inject summary if provided
         if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
             finalMessages.push({
                 role: "assistant",
@@ -367,10 +366,10 @@ exports.askChatbot = async (req, res) => {
             });
         }
 
-        // ✅ Step 6: Add full previous history
+        // ✅ Step 6: Add the full previous conversation history to the prompt
         finalMessages.push(...chatHistory);
 
-        // ✅ Step 7: Add current user message + uploaded files
+        // ✅ Step 7: Add the current user message
         let fullUserMessage = userMessage || "";
         if (Array.isArray(req.body.uploaded_file_metadata) && req.body.uploaded_file_metadata.length > 0) {
             const fileNames = req.body.uploaded_file_metadata.map(f => f.file_name);
@@ -384,7 +383,7 @@ exports.askChatbot = async (req, res) => {
 
         console.log("🧠 Final Prompt to AI:", finalMessages);
 
-        // Step 8: Send to AI
+        // Step 8: Send to AI (OpenAI or Deepgram as before)
         let aiResponse = "";
         if (process.env.USE_OPENAI === "true") {
             const openaiResponse = await openai.chat.completions.create({
@@ -402,7 +401,7 @@ exports.askChatbot = async (req, res) => {
 
         console.log("🤖 AI Response:", aiResponse);
 
-        // Step 9: Save to DB
+        // Step 9: Save to DB (storing the user message, AI response, and extracted text if any)
         const filePaths = (req.body.uploaded_file_metadata || []).map(f => f.file_path);
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
@@ -422,6 +421,8 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
+
 
 
 
