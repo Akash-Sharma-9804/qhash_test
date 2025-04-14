@@ -377,6 +377,9 @@ exports.askChatbot = async (req, res) => {
         console.log("🧾 Full User Message (with filenames):", fullUserMessage);
         console.log("📁 File Paths:", filePaths);
 
+
+        console.log("🔍 Extracted Summary being passed to askChatbot:", extracted_summary);
+
         // ✅ Step 7: Inject extracted summary BEFORE user prompt
         if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
             chatHistory.push({
