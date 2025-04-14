@@ -328,9 +328,9 @@ exports.askChatbot = async (req, res) => {
             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
         }
 
-        // Step 3: Fetch the chat history from the current conversation only
+        // Step 3: Fetch chat history including extracted text (if relevant)
         const [historyResultsRaw] = await db.query(
-            "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
+            "SELECT user_message AS message, response, extracted_text FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
             [conversation_id]
         );
 
@@ -339,6 +339,7 @@ exports.askChatbot = async (req, res) => {
             .map(chat => [
                 { role: "user", content: chat.message },
                 { role: "assistant", content: chat.response },
+                { role: "assistant", content: chat.extracted_text } // Ensure extracted text is added
             ])
             .flat()
             .filter(m => m?.content);
@@ -421,6 +422,7 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
 
 
