@@ -328,27 +328,44 @@ exports.askChatbot = async (req, res) => {
             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
         }
 
-        // Step 3: Fetch chat history
+        // Step 3: Fetch chat history with more context
         const [historyResultsRaw] = await db.query(
-            "SELECT user_message AS message, response, extracted_text FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
+            `SELECT 
+                user_message AS message, 
+                response, 
+                extracted_text,
+                file_path,
+                created_at
+             FROM chat_history 
+             WHERE conversation_id = ? 
+             ORDER BY created_at ASC`,
             [conversation_id]
         );
 
         const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
         
-        // Build conversation history more carefully
+        // Build conversation history with context awareness
         const chatHistory = [];
+        let lastExtractedText = null;
+        
         historyResults.forEach(chat => {
+            // Add user message
             if (chat.message) {
                 chatHistory.push({ role: "user", content: chat.message });
             }
+            
+            // Add assistant response
             if (chat.response) {
                 chatHistory.push({ role: "assistant", content: chat.response });
             }
-            // Only include extracted text if it's relevant to the current query
+            
+            // Track the most recent extracted text
+            if (chat.extracted_text) {
+                lastExtractedText = chat.extracted_text;
+            }
         });
 
-        // Step 4: Improved system prompt
+        // Step 4: Enhanced system prompt with conversation management
         const currentDate = new Date().toLocaleDateString('en-US', {
             year: 'numeric', month: 'long', day: 'numeric'
         });
@@ -356,30 +373,65 @@ exports.askChatbot = async (req, res) => {
         const systemPrompt = {
             role: "system",
             content:
-                `You are Quantumhash, an intelligent AI assistant developed by the Quantumhash team.\n\n` +
-                `You are having a conversation with a user. Maintain context from previous messages in this conversation.\n` +
-                `Current date: ${currentDate}. Be helpful, concise, and accurate in your responses.`
+                `You are Quantumhash, an intelligent AI assistant. Follow these guidelines:\n` +
+                `1. Maintain full context of the ongoing conversation\n` +
+                `2. Remember all previously discussed topics in this chat\n` +
+                `3. For file-related questions, reference the extracted content when available\n` +
+                `4. If a question refers to previous messages, connect it to the relevant context\n` +
+                `5. When unsure, ask clarifying questions\n` +
+                `Current date: ${currentDate}\n\n` +
+                `Conversation context:\n` +
+                `- User ID: ${user_id}\n` +
+                `- Conversation ID: ${conversation_id}\n` +
+                `${lastExtractedText ? '- Document content is available for reference' : ''}`
         };
 
         const finalMessages = [systemPrompt];
 
-        // Step 5: Only inject summary if it's new information (not already in history)
+        // Step 5: Smarter document context injection
         const hasExistingSummary = historyResults.some(chat => chat.extracted_text === extracted_summary);
-        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content" && !hasExistingSummary) {
+        
+        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
+            if (!hasExistingSummary) {
+                // For new documents, provide full context
+                finalMessages.push({
+                    role: "assistant",
+                    content: `📄 Document content available for reference (${extracted_summary.length.toLocaleString()} characters)`
+                });
+                
+                // Store the full content in the lastExtractedText variable
+                lastExtractedText = extracted_summary;
+            }
+            
+            // Always add a condensed version of the document to the context
+            const condensedSummary = extracted_summary.length > 2000 
+                ? `${extracted_summary.substring(0, 2000)}... [document continues]`
+                : extracted_summary;
+                
             finalMessages.push({
-                role: "assistant",
-                content: `📄 Extracted content from uploaded files:\n\n${extracted_summary}`
+                role: "system",
+                content: `Current document context:\n${condensedSummary}`
             });
         }
 
-        // Step 6: Add conversation history
-        finalMessages.push(...chatHistory);
+        // Step 6: Add conversation history with context window management
+        const MAX_HISTORY_LENGTH = 20; // Limit to last 20 exchanges
+        const recentHistory = chatHistory.slice(-MAX_HISTORY_LENGTH * 2); // Multiply by 2 for user/assistant pairs
+        
+        finalMessages.push(...recentHistory);
 
-        // Step 7: Add current user message
+        // Step 7: Enhanced current message handling
         let fullUserMessage = userMessage || "";
-        if (Array.isArray(req.body.uploaded_file_metadata) && req.body.uploaded_file_metadata.length > 0) {
-            const fileNames = req.body.uploaded_file_metadata.map(f => f.file_name);
-            fullUserMessage += `\n\n[Uploaded files: ${fileNames.join(", ")}]`;
+        const fileContext = [];
+        
+        if (Array.isArray(req.body.uploaded_file_metadata) {
+            req.body.uploaded_file_metadata.forEach(f => {
+                fileContext.push(`- ${f.file_name} (${f.file_size ? (f.file_size / 1024).toFixed(1) + 'KB' : 'size unknown'})`);
+            });
+        }
+
+        if (fileContext.length > 0) {
+            fullUserMessage += `\n\n[Attached files:\n${fileContext.join('\n')}]`;
         }
 
         finalMessages.push({
@@ -389,44 +441,79 @@ exports.askChatbot = async (req, res) => {
 
         console.log("🧠 Final Prompt to AI:", JSON.stringify(finalMessages, null, 2));
 
-        // Step 8: Send to AI
+        // Step 8: Enhanced AI response generation
         let aiResponse = "";
-        if (process.env.USE_OPENAI === "true") {
-            const openaiResponse = await openai.chat.completions.create({
-                model: "gpt-4",
-                messages: finalMessages,
-                temperature: 0.7 // Added for more natural responses
-            });
-            aiResponse = openaiResponse.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
-        } else {
-            const deepseekResponse = await deepseek.chat.completions.create({
-                model: "deepseek-chat",
-                messages: finalMessages,
-                temperature: 0.7
-            });
-            aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
+        const aiOptions = {
+            model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
+            messages: finalMessages,
+            temperature: 0.7,
+            max_tokens: 1500,
+            top_p: 0.9,
+            frequency_penalty: 0.2, // Slightly reduce repetition
+            presence_penalty: 0.2   // Slightly encourage new topics
+        };
+
+        try {
+            const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
+            const aiResult = await aiProvider.chat.completions.create(aiOptions);
+            
+            aiResponse = aiResult.choices?.[0]?.message?.content || "I couldn't generate a response. Please try again.";
+            
+            // Post-process the response for better conversation flow
+            if (lastExtractedText && userMessage.toLowerCase().match(/(page|section|part)\s+\d+/i)) {
+                const pageMatch = userMessage.match(/(page|section|part)\s+(\d+)/i);
+                if (pageMatch) {
+                    const pageNum = pageMatch[2];
+                    if (!aiResponse.includes(pageNum) && !aiResponse.includes("page")) {
+                        aiResponse = `Regarding page ${pageNum}:\n${aiResponse}\n\n[If this doesn't answer your question about page ${pageNum}, please provide more details]`;
+                    }
+                }
+            }
+        } catch (error) {
+            console.error("AI API error:", error);
+            aiResponse = "I'm having trouble processing your request. Please try again later.";
         }
 
         console.log("🤖 AI Response:", aiResponse);
 
-        // Step 9: Save to DB
+        // Step 9: Enhanced database storage
         const filePaths = (req.body.uploaded_file_metadata || []).map(f => f.file_path);
         await db.query(
-            "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
-            [conversation_id, fullUserMessage, aiResponse, filePaths.join(","), extracted_summary || null]
+            `INSERT INTO chat_history 
+             (conversation_id, user_message, response, created_at, file_path, extracted_text, message_context) 
+             VALUES (?, ?, ?, NOW(), ?, ?, ?)`,
+            [
+                conversation_id, 
+                fullUserMessage, 
+                aiResponse, 
+                filePaths.join(","), 
+                extracted_summary || null,
+                JSON.stringify({
+                    systemPrompt: systemPrompt.content,
+                    historyLength: recentHistory.length
+                })
+            ]
         );
 
-        // Step 10: Return response
+        // Step 10: Return enhanced response
         res.json({
             success: true,
             conversation_id,
             response: aiResponse,
             uploaded_files: (req.body.uploaded_file_metadata || []).map(f => f.file_name),
+            context: {
+                history_items: recentHistory.length / 2,
+                document_available: !!lastExtractedText
+            }
         });
 
     } catch (error) {
         console.error("❌ askChatbot error:", error.stack || error.message);
-        res.status(500).json({ error: "Internal server error", details: error.message });
+        res.status(500).json({ 
+            error: "Internal server error", 
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 };
 
