@@ -319,7 +319,7 @@ exports.askChatbot = async (req, res) => {
             conversation_id = conversationResult.insertId;
         }
 
-        // Step 2: Validate conversation ownership
+        // Step 2: Check ownership
         const [existingConversation] = await db.query(
             "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
             [conversation_id, user_id]
@@ -328,79 +328,71 @@ exports.askChatbot = async (req, res) => {
             return res.status(403).json({ error: "Unauthorized: Conversation does not belong to the user." });
         }
 
-        // Step 3: Fetch full chat history
-        const historyResultsRaw = await db.query(
-            "SELECT user_message AS message, response, extracted_text FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
+        // Step 3: Fetch chat history
+        const [historyResultsRaw] = await db.query(
+            "SELECT user_message AS message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
             [conversation_id]
         );
-        
 
-        const chatHistory = [];
+        const historyResults = Array.isArray(historyResultsRaw) ? historyResultsRaw : [];
+        const chatHistory = historyResults
+            .map(chat => [
+                { role: "user", content: chat.message },
+                { role: "assistant", content: chat.response },
+            ])
+            .flat()
+            .filter(m => m?.content);
 
         // Step 4: Add system prompt
         const currentDate = new Date().toLocaleDateString('en-US', {
             year: 'numeric', month: 'long', day: 'numeric'
         });
 
-        chatHistory.push({
+        const systemPrompt = {
             role: "system",
             content:
-                "You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
-                "You were created in 2024 by the Quantumhash team. " +
-                "If asked about your name, say: 'My name is Quantumhash AI.' " +
-                "If asked who created you, say: 'I was developed by the Quantumhash development team.' " +
-                `If asked about your knowledge cutoff, say: 'I have information up to the present, ${currentDate}.'`
-        });
+                `You are Quantumhash, an intelligent AI developed by the Quantumhash team in 2024.\n\n` +
+                `Your responses should be based on the user's uploaded documents, especially using extracted summaries broken down by page.\n` +
+                `Always answer based on that context when users ask about specific pages or sections. If the content isn’t available, say “Not available in the provided content.”\n\n` +
+                `Your current knowledge includes everything provided by the user up to ${currentDate}.`
+        };
 
-        // Step 5: Append all previous messages to history
-        let combinedExtractedSummaries = "";
+        chatHistory.unshift(systemPrompt);
 
-        historyResultsRaw.forEach(chat => {
-            chatHistory.push({ role: "user", content: chat.message });
-            chatHistory.push({ role: "assistant", content: chat.response });
+        // Step 5: Handle uploaded files
+        let filePaths = [];
+        let fileNames = [];
 
-            // Combine extracted summaries from all previous chats
-            if (chat.extracted_text && chat.extracted_text !== "No readable content") {
-                combinedExtractedSummaries += `\n\n${chat.extracted_text}`;
-            }
-        });
-
-        // Step 6: Get uploaded file info from current message
-        const filePaths = req.body.uploaded_file_metadata?.map(f => f.file_path) || [];
-        const fileNames = req.body.uploaded_file_metadata?.map(f => f.file_name) || [];
-
-        // Step 7: Append extracted_summary from current message (if any)
-        if (
-            extracted_summary &&
-            extracted_summary.trim() !== "" &&
-            extracted_summary.trim() !== "No readable content"
-        ) {
-            combinedExtractedSummaries += `\n\n${extracted_summary}`;
+        if (Array.isArray(req.body.uploaded_file_metadata) && req.body.uploaded_file_metadata.length > 0) {
+            filePaths = req.body.uploaded_file_metadata.map(f => f.file_path);
+            fileNames = req.body.uploaded_file_metadata.map(f => f.file_name);
         }
 
-        // Step 8: Inject combined extracted file content as a "memory" prompt
-        if (combinedExtractedSummaries.trim()) {
+        // Step 6: Construct full user message
+        let fullUserMessage = userMessage || "";
+        if (fileNames.length > 0) {
+            fullUserMessage += `\n\n[Uploaded files:]\n${fileNames.map(name => `📎 ${name}`).join("\n")}`;
+        }
+
+        console.log("🧾 Full User Message (with filenames):", fullUserMessage);
+        console.log("📁 File Paths:", filePaths);
+
+        // ✅ Step 7: Inject extracted summary BEFORE user prompt
+        if (extracted_summary && extracted_summary.trim() && extracted_summary !== "No readable content") {
             chatHistory.push({
-                role: "user",
+                role: "assistant",
                 content:
-                    "Here is the content from previously uploaded files. This includes scanned PDFs, text, DOCX, or images:\n\n" +
-                    combinedExtractedSummaries.trim() +
-                    "\n\nPlease use this context to answer follow-up questions or find information from these documents."
+                    `📄 Here's the extracted content from the uploaded files, organized by page. Use this when answering:\n\n${extracted_summary}`
             });
         }
 
-        // Step 9: Add current user message (with file name display)
-        let fullUserMessage = userMessage || "";
-        if (fileNames.length > 0) {
-            fullUserMessage += `\n\n📎 Uploaded files:\n${fileNames.map(name => `- ${name}`).join("\n")}`;
-        }
-
+        // ✅ Step 8: Push actual user prompt
         chatHistory.push({
             role: "user",
             content: fullUserMessage,
         });
 
-        // Step 10: AI Response
+        // Step 9: Send to AI
         let aiResponse = "";
         if (process.env.USE_OPENAI === "true") {
             const openaiResponse = await openai.chat.completions.create({
@@ -416,15 +408,15 @@ exports.askChatbot = async (req, res) => {
             aiResponse = deepseekResponse?.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
         }
 
-        console.log("AI Response:", aiResponse);
+        console.log("🤖 AI Response:", aiResponse);
 
-        // Step 11: Save to DB
+        // Step 10: Save to DB
         await db.query(
             "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
             [conversation_id, fullUserMessage, aiResponse, filePaths.join(","), extracted_summary || null]
         );
 
-        // Step 12: Send response
+        // Step 11: Return response
         res.json({
             success: true,
             conversation_id,
@@ -437,6 +429,7 @@ exports.askChatbot = async (req, res) => {
         res.status(500).json({ error: "Internal server error", details: error.message });
     }
 };
+
 
 
 
