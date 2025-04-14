@@ -329,10 +329,11 @@ exports.askChatbot = async (req, res) => {
         }
 
         // Step 3: Fetch full chat history
-        const [historyResultsRaw] = await db.query(
+        const historyResultsRaw = await db.query(
             "SELECT user_message AS message, response, extracted_text FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
             [conversation_id]
         );
+        
 
         const chatHistory = [];
 
