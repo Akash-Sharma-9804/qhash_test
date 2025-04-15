@@ -4,7 +4,8 @@ const {
     getChatHistory,
     createConversation,
     getConversations,
-    getConversationHistory
+    getConversationHistory,
+    updateConversationName
 } = require("../controllers/chatController");
 const authMiddleware = require("../middleware/authMiddleware");
 
@@ -24,5 +25,9 @@ router.post("/", authMiddleware, askChatbot);
 
 // ✅ Fetch general chat history for the authenticated user
 router.get("/history", authMiddleware, getChatHistory);
+
+// ✅ rename conversation name
+router.put('/rename/:conversationId', authMiddleware, updateConversationName);
+
 
 module.exports = router;

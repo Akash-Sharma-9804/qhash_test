@@ -50,7 +50,7 @@ exports.createConversation = async (req, res) => {
 
 // ✅ Get all conversations for a user
 
-
+ 
 exports.getConversations = async (req, res) => {
     const user_id = req.user.user_id;
     console.log("🔹 User ID in getConversations:", user_id);
@@ -74,11 +74,14 @@ exports.getConversations = async (req, res) => {
     }
 };
 
+
   
 
 
 
 // ✅ Get chat history for a specific conversation
+
+// working
 exports.getConversationHistory = async (req, res) => {
     const { conversation_id } = req.params;
   
@@ -108,8 +111,96 @@ exports.getConversationHistory = async (req, res) => {
     }
   };
   
+    // test
+
+// test
+//   
+  
+//   exports.getConversationHistory = async (req, res) => {
+//     try {
+//       const { conversation_id } = req.params;
+  
+//       const sql = `
+//         SELECT id, user_message AS message, response, created_at, file_path
+//         FROM chat_history
+//         WHERE conversation_id = ?
+//         ORDER BY created_at ASC
+//       `;
+  
+//       const rows = await query(sql, [parseInt(conversation_id)]);
+  
+//       const history = rows.map((row) => {
+//         const fileUrl = row.file_path;
+  
+//         let files = [];
+//         if (fileUrl) {
+//           const fileName = fileUrl.split("/").pop();
+//           const extension = fileName.split(".").pop().toLowerCase();
+            
+//           console.log("file name is ", fileName);
+//           console.log("file extension is ", extension);
+
+//           const typeMap = {
+//             pdf: "application/pdf",
+//             docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+//             txt: "text/plain",
+//             jpg: "image/jpeg",
+//             jpeg: "image/jpeg",
+//             png: "image/png",
+//             gif: "image/gif",
+//             webp: "image/webp",
+//           };
+  
+//           const fileType = typeMap[extension] || "application/octet-stream";
+          
+//           console.log("file fileType is ", fileType);
+
+//           files = [
+//             {
+//               file_url: fileUrl,
+//               file_name: fileName,
+//               type: fileType,
+//             },
+//           ];
+//         }
+  
+//         return {
+//           id: row.id,
+//           message: row.message,
+//           response: row.response,
+//           created_at: row.created_at,
+//           files, // ✅ formatted file array
+//         };
+//       });
+  
+//       return res.status(200).json({ success: true, history });
+//     } catch (error) {
+//       console.error("Error fetching conversation history:", error);
+//       return res.status(500).json({ success: false, message: "Server error" });
+//     }
+//   };
   
   
+  // ✅ update conversation name
+exports.updateConversationName = async (req, res) => {
+    const { conversationId } = req.params;
+    const { name } = req.body;
+  
+    if (!name) {
+      return res.status(400).json({ error: "New name is required" });
+    }
+  
+    try {
+      await db.query(
+        "UPDATE conversations SET name = ? WHERE id = ?",
+        [name, conversationId]
+      );
+      return res.status(200).json({ success: true, name });
+    } catch (error) {
+      console.error("Error renaming conversation:", error.message);
+      return res.status(500).json({ error: "Failed to rename conversation" });
+    }
+  };
   
   
 
@@ -294,10 +385,6 @@ exports.getChatHistory = async (req, res) => {
 // };
 
 // test
-
- 
-
-
 exports.askChatbot = async (req, res) => {
     console.log("✅ Received request at /chat:", req.body);
 
@@ -418,12 +505,33 @@ exports.askChatbot = async (req, res) => {
             aiResponse = "I'm having trouble processing your request. Please try again.";
         }
 
-        // Step 8: Save new chat entry
+        // Step 8: Save new chat entry working
+        // try {
+        //     const filePaths = (req.body.uploaded_file_metadata || [])
+        //         .map(f => f?.file_path)
+        //         .filter(Boolean);
+            
+        //     await db.query(
+        //         "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
+        //         [
+        //             conversation_id,
+        //             fullUserMessage,
+        //             aiResponse,
+        //             filePaths.join(','),
+        //             extracted_summary || null
+        //         ]
+        //     );
+        // } catch (dbError) {
+        //     console.error("Database save error:", dbError);
+        // }
+
+
+        // Step 8: Save new chat entry try
         try {
             const filePaths = (req.body.uploaded_file_metadata || [])
                 .map(f => f?.file_path)
                 .filter(Boolean);
-            
+        
             await db.query(
                 "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text) VALUES (?, ?, ?, NOW(), ?, ?)",
                 [
@@ -434,9 +542,38 @@ exports.askChatbot = async (req, res) => {
                     extracted_summary || null
                 ]
             );
+        
+            // 🔄 Rename logic
+            if (userMessage) {
+                const [rows] = await db.query(
+                    "SELECT name FROM conversations WHERE id = ?",
+                    [conversation_id]
+                );
+        
+                const currentName = rows?.name;
+                console.log("Current conversation name:", currentName);
+                console.log("User message:", userMessage);
+        
+                if (currentName === "New Conversation") {
+                    const newName = userMessage.substring(0, 20);
+                    console.log("Renaming conversation to:", newName);
+        
+                    const [updateResult] = await db.query(
+                        "UPDATE conversations SET name = ? WHERE id = ?",
+                        [newName, conversation_id]
+                    );
+        
+                    console.log("✅ Rename result:", updateResult);
+                }
+            }
         } catch (dbError) {
-            console.error("Database save error:", dbError);
+            console.error("❌ Database save error:", dbError);
         }
+        
+        
+        
+        
+
 
         // Step 9: Respond to frontend
         res.json({

@@ -65,7 +65,7 @@ exports.signup = async (req, res) => {
         // Create initial conversation
         const [conversationResult] = await connection.query(
             "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-            [user_id, "New Chat"]
+            [user_id, "New Conversation"]
         );
 
         const conversation_id = conversationResult.insertId;
@@ -156,7 +156,7 @@ exports.login = async (req, res) => {
         try {
             const [newConversation] = await db.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-                [user.id, "New Chat"]
+                [user.id, "New Conversation"]
             );
 
             if (!newConversation || !newConversation.insertId) {
