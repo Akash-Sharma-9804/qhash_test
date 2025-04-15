@@ -55,7 +55,7 @@ exports.getConversations = async (req, res) => {
 
   try {
     const rows = await db.query(
-      "SELECT * FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY updated_at DESC",
+      "SELECT * FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY created_at DESC",
       [user_id]
     );
 
