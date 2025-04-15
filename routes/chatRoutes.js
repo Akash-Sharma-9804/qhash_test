@@ -5,6 +5,7 @@ const {
     createConversation,
     getConversations,
     getConversationHistory,
+    softDeleteConversation,
     updateConversationName
 } = require("../controllers/chatController");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -28,6 +29,9 @@ router.get("/history", authMiddleware, getChatHistory);
 
 // ✅ rename conversation name
 router.put('/rename/:conversationId', authMiddleware, updateConversationName);
+
+// ✅ Soft delete a conversation
+router.patch('/conversations/:id/delete', authMiddleware, softDeleteConversation);
 
 
 module.exports = router;

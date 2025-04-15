@@ -55,7 +55,7 @@ exports.getConversations = async (req, res) => {
 
   try {
     const rows = await db.query(
-      "SELECT * FROM conversations WHERE user_id = ? ORDER BY created_at DESC",
+      "SELECT * FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY updated_at DESC",
       [user_id]
     );
 
@@ -587,3 +587,30 @@ exports.askChatbot = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
+
+
+// delete function 
+// DELETE /api/conversations/:id (soft delete)
+// Soft delete a conversation (set is_deleted = true)
+exports.softDeleteConversation = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.user_id; // match your token field
+  
+    try {
+      const result = await db.query(
+        'UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?',
+        [id, userId]
+      );
+  
+      if (result[0].affectedRows === 0) {
+        return res.status(404).json({ error: 'Conversation not found or unauthorized' });
+      }
+  
+      res.json({ success: true, message: 'Conversation soft deleted' });
+    } catch (err) {
+      console.error('❌ Error soft deleting conversation:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  };
+  
+  
