@@ -592,25 +592,46 @@ exports.askChatbot = async (req, res) => {
 // delete function 
 // DELETE /api/conversations/:id (soft delete)
 // Soft delete a conversation (set is_deleted = true)
+// exports.softDeleteConversation = async (req, res) => {
+//     const { id } = req.params;
+//     const userId = req.user.user_id; // match your token field
+  
+//     try {
+//       const result = await db.query(
+//         'UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?',
+//         [id, userId]
+//       );
+  
+//       if (result[0].affectedRows === 0) {
+//         return res.status(404).json({ error: 'Conversation not found or unauthorized' });
+//       }
+  
+//       res.json({ success: true, message: 'Conversation soft deleted' });
+//     } catch (err) {
+//       console.error('❌ Error soft deleting conversation:', err);
+//       res.status(500).json({ error: 'Server error' });
+//     }
+//   };
+  
+  
 exports.softDeleteConversation = async (req, res) => {
-    const { id } = req.params;
-    const userId = req.user.user_id; // match your token field
-  
-    try {
-      const result = await db.query(
-        'UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?',
-        [id, userId]
-      );
-  
-      if (result[0].affectedRows === 0) {
-        return res.status(404).json({ error: 'Conversation not found or unauthorized' });
-      }
-  
-      res.json({ success: true, message: 'Conversation soft deleted' });
-    } catch (err) {
-      console.error('❌ Error soft deleting conversation:', err);
-      res.status(500).json({ error: 'Server error' });
+  const { id } = req.params;
+  const userId = req.user.user_id;
+
+  try {
+    const result = await db.query(
+      'UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?',
+      [id, userId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Conversation not found or unauthorized' });
     }
-  };
-  
-  
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('❌ Error soft deleting conversation:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
