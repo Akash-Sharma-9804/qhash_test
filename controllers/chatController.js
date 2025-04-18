@@ -396,7 +396,7 @@ exports.getChatHistory = async (req, res) => {
 
 // final working code 
 
- 
+// test
 
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
