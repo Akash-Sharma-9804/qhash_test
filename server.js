@@ -76,7 +76,7 @@ const PORT = process.env.PORT || 5001;
 // ✅ Allowed origins for both local & production
 const allowedOrigins = [
   "http://localhost:5173",          // Local dev
-  "https://yourfrontenddomain.com"  // Your production frontend domain
+  "https://quantumhash.me"  // Your production frontend domain
 ];
 
 // ✅ CORS middleware (basic setup)
