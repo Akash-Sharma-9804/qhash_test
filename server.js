@@ -55,7 +55,7 @@
 //   console.log(`🚀 Server running on http://localhost:${PORT}`);
 // });
 
-// test 
+// test working
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -68,7 +68,8 @@ const authRoutes = require("./routes/authRoutes");
 const fileRoutes = require("./routes/fileRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const voiceRoutes = require("./routes/voiceRoutes");
-const { handleVoiceStream } = require("./controllers/voiceController");
+// const { handleLiveVoiceMessage } = require("./controllers/voiceController");
+const { handleLiveVoiceMessage } = require("./controllers/voiceController");
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -91,7 +92,9 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
 // ✅ Middleware
-app.use(express.json());
+// app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
 // ✅ Routes
@@ -137,7 +140,7 @@ wss.on("connection", async (ws, req) => {
     }
 
     // Proceed with handling the voice stream if the token is valid
-    await handleVoiceStream(ws, userId);
+    await handleLiveVoiceMessage(ws, userId);
   } catch (error) {
     console.error("❌ WebSocket Auth Error:", error.message);
     ws.close(); // Close connection if any error occurs
