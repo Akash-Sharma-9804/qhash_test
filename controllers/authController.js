@@ -220,6 +220,82 @@ exports.signup = async (req, res) => {
     }
 };
 
+// exports.login = async (req, res) => {
+//     const { email, password } = req.body;
+
+//     if (!email || !password) {
+//         return res.status(400).json({ error: "All fields are required" });
+//     }
+
+//     try {
+//         console.log("🔍 Logging in with email:", email);
+
+//         const [users] = await db.query("SELECT * FROM users WHERE email = ?", [email]);
+//         console.log("🛠 Query Result:", users);
+
+//         const user = Array.isArray(users) ? users[0] : users;
+
+//         if (!user || Object.keys(user).length === 0) {
+//             console.log("❌ No user found for email:", email);
+//             return res.status(404).json({ error: "User not found" });
+//         }
+
+//         console.log("✅ User found:", user);
+
+//         if (!user.password) {
+//             console.error("❌ ERROR: user.password is undefined!");
+//             return res.status(500).json({ error: "Server error: Password is missing" });
+//         }
+
+//         const passwordMatch = await bcrypt.compare(password, user.password);
+//         if (!passwordMatch) {
+//             return res.status(401).json({ error: "Invalid credentials" });
+//         }
+
+//         console.log("🔹 User logged in:", user.id);
+
+//         await ensureUserInHistory(connection,user.id, user.username, user.email);
+
+//         const token = jwt.sign({ user_id: user.id }, process.env.JWT_SECRET, { expiresIn: "15d" });
+//         console.log("🛠 Generated Token:", token);
+
+//         // 🔄 Always create a new conversation on login
+//         let conversation_id = null;
+//         try {
+//             const [newConversation] = await db.query(
+//                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+//                 [user.id, "New Conversation"]
+//             );
+
+//             if (!newConversation || !newConversation.insertId) {
+//                 console.error("❌ Error: Failed to create a new conversation");
+//                 throw new Error("Failed to create a conversation");
+//             }
+
+//             conversation_id = newConversation.insertId;
+//             console.log("✅ New Conversation Created with ID:", conversation_id);
+//         } catch (error) {
+//             console.error("❌ Error creating conversation:", error.message);
+//             return res.status(500).json({ error: "Database error", details: error.message });
+//         }
+
+//         return res.json({
+//             success: true,
+//             token,
+//             user: {
+//                 user_id: user.id,
+//                 username: user.username,
+//                 email: user.email
+//             },
+//             conversation_id
+//         });
+
+//     } catch (error) {
+//         console.error("❌ Error logging in:", error.message);
+//         return res.status(500).json({ error: "Login failed", details: error.message });
+//     }
+// };
+
 exports.login = async (req, res) => {
     const { email, password } = req.body;
 
@@ -227,10 +303,13 @@ exports.login = async (req, res) => {
         return res.status(400).json({ error: "All fields are required" });
     }
 
+    let connection;
+
     try {
+        connection = await db.getConnection(); // ✅ Get a connection
         console.log("🔍 Logging in with email:", email);
 
-        const [users] = await db.query("SELECT * FROM users WHERE email = ?", [email]);
+        const [users] = await connection.query("SELECT * FROM users WHERE email = ?", [email]);
         console.log("🛠 Query Result:", users);
 
         const user = Array.isArray(users) ? users[0] : users;
@@ -254,15 +333,14 @@ exports.login = async (req, res) => {
 
         console.log("🔹 User logged in:", user.id);
 
-        await ensureUserInHistory(connection,user.id, user.username, user.email);
+        await ensureUserInHistory(connection, user.id, user.username, user.email);
 
         const token = jwt.sign({ user_id: user.id }, process.env.JWT_SECRET, { expiresIn: "15d" });
         console.log("🛠 Generated Token:", token);
 
-        // 🔄 Always create a new conversation on login
         let conversation_id = null;
         try {
-            const [newConversation] = await db.query(
+            const [newConversation] = await connection.query(
                 "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
                 [user.id, "New Conversation"]
             );
@@ -293,13 +371,20 @@ exports.login = async (req, res) => {
     } catch (error) {
         console.error("❌ Error logging in:", error.message);
         return res.status(500).json({ error: "Login failed", details: error.message });
+    } finally {
+        if (connection && connection.release) {
+            try {
+                connection.release();
+            } catch (releaseError) {
+                console.error("❌ Connection release failed:", releaseError.message);
+            }
+        }
     }
 };
 
 
 
 
-// 
 
 
 
