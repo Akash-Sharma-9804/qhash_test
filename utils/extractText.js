@@ -12,7 +12,7 @@ const extractText = async (buffer, mimeType, ftpUrl) => {
   try {
     // ✅ OCR for PDFs and images using public URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
-      const documentUrl = `https://quantumhash.me${ftpUrl}`;
+      const documentUrl = `https://qhashai.com/${ftpUrl}`;
       console.log("🔗 Document URL:", documentUrl);
 
       try {
