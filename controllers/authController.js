@@ -29,6 +29,7 @@ async function ensureUserInHistory(connection, user_id, username, email) {
             "SELECT id FROM user_history WHERE id = ?",
             [user_id]
         );
+        
 
         if (existingUser.length === 0) {
             await connection.query(
@@ -134,6 +135,7 @@ async function ensureUserInHistory(connection, user_id, username, email) {
 // test
 exports.signup = async (req, res) => {
     const { username, email, password } = req.body;
+    console.log("✅ Cleaned email:", JSON.stringify(email));
 
     if (!username || !email || !password) {
         return res.status(400).json({ error: "All fields are required" });

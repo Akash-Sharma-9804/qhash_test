@@ -1,4 +1,4 @@
-  const db = require("../config/db");
+const db = require("../config/db");
 const openai = require("../config/openai");
 const deepseek = require("../config/deepseek");
 const { query } = require("../config/db"); // make sure you're importing correctly
@@ -122,11 +122,11 @@ exports.getConversationHistory = async (req, res) => {
     return res.status(200).json({ success: true, history: formattedHistory });
   } catch (error) {
     console.error("❌ Error fetching conversation history:", error.message);
-    return res.status(500).json({ error: "Failed to retrieve conversation history" });
+    return res
+      .status(500)
+      .json({ error: "Failed to retrieve conversation history" });
   }
 };
-
- 
 
 // ✅ update conversation name
 exports.updateConversationName = async (req, res) => {
@@ -170,16 +170,224 @@ exports.getChatHistory = async (req, res) => {
   }
 };
 
- 
-
 // final working
- 
+// exports.askChatbot = async (req, res) => {
+//   console.log("✅ Received request at /chat:", req.body);
 
+//   let { userMessage, conversation_id, extracted_summary } = req.body;
+//   const user_id = req.user?.user_id;
+
+//   if (!user_id) {
+//     return res.status(401).json({ error: "Unauthorized: User ID not found." });
+//   }
+
+//   if (!userMessage && !extracted_summary) {
+//     return res
+//       .status(400)
+//       .json({ error: "User message or extracted summary is required" });
+//   }
+
+//   const uploadedFiles = req.body.uploaded_file_metadata || [];
+
+//   try {
+//     // Step 1: Create new conversation if needed
+//     if (!conversation_id || isNaN(conversation_id)) {
+//       const [conversationResult] = await db.query(
+//         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+//         [user_id, userMessage?.substring(0, 20) || "New Chat"]
+//       );
+//       conversation_id = conversationResult.insertId;
+//     }
+
+//     // Step 2: Verify user owns this conversation
+//     const [existingConversation] = await db.query(
+//       "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+//       [conversation_id, user_id]
+//     );
+//     if (!existingConversation || existingConversation.length === 0) {
+//       return res.status(403).json({
+//         error: "Unauthorized: Conversation does not belong to the user.",
+//       });
+//     }
+
+//     // Step 3: Fetch full chat history
+//     const historyResultsRaw = await db.query(
+//       "SELECT user_message AS message, response, extracted_text, file_path FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
+//       [conversation_id]
+//     );
+//     const historyResults = Array.isArray(historyResultsRaw)
+//       ? historyResultsRaw
+//       : [];
+
+//     const chatHistory = [];
+//     const allExtractedTexts = [];
+
+//     historyResults.forEach((chat) => {
+//       if (chat.message)
+//         chatHistory.push({ role: "user", content: chat.message });
+//       if (chat.response)
+//         chatHistory.push({ role: "assistant", content: chat.response });
+
+//       if (chat.extracted_text) {
+//         allExtractedTexts.push(chat.extracted_text);
+//       }
+//     });
+
+//     // Step 4: Include new document (if any)
+//     if (extracted_summary && extracted_summary !== "No readable content") {
+//       allExtractedTexts.push(extracted_summary);
+//     }
+
+//     // Step 5: Create system prompt
+//     const currentDate = new Date().toLocaleDateString("en-US", {
+//       year: "numeric",
+//       month: "long",
+//       day: "numeric",
+//     });
+
+//     const systemPrompt = {
+//       role: "system",
+//       content:
+//         `You are an intelligent assistant. Today's date is ${currentDate}.` +
+//         " You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
+//         "When you were developed, you were created in 2024 by the Quantumhash development team. " +
+//         "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+//         " If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team." +
+//         ` If someone asks about your knowledge cutoff date, *only say*: 'I’ve got information up to the present, ${currentDate}.` +
+//         "You have access to previous documents uploaded by the user during this conversation ,Use all relevant information from those documents to help answer the user's current and follow-up questions.",
+//     };
+
+//     // Step 6: Build messages array
+//     const finalMessages = [systemPrompt];
+
+//     // Add recent 10 messages (5 user + 5 assistant)
+//     const recentHistory = chatHistory.slice(-10);
+//     finalMessages.push(...recentHistory);
+
+//     // Add combined document context
+//     if (allExtractedTexts.length > 0) {
+//       const combinedText = allExtractedTexts.join("\n---\n").substring(0, 5000);
+//       finalMessages.push({
+//         role: "system",
+//         content: `DOCUMENT CONTEXT:\n${combinedText}${
+//           combinedText.length >= 5000 ? "\n... (truncated)" : ""
+//         }`,
+//       });
+//     }
+
+//     // Build full user message
+//     let fullUserMessage = userMessage || "";
+//     if (Array.isArray(uploadedFiles)) {
+//       const fileNames = uploadedFiles.map((f) => f?.file_name).filter(Boolean);
+//       if (fileNames.length > 0) {
+//         fullUserMessage += `\n[Uploaded files: ${fileNames.join(", ")}]`;
+//       }
+//     }
+
+//     finalMessages.push({ role: "user", content: fullUserMessage });
+
+//     // Step 7: AI Response
+//     let aiResponse = "";
+//     try {
+//       const aiOptions = {
+//         model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
+//         messages: finalMessages,
+//         temperature: 0.7,
+//         max_tokens: 1500,
+//       };
+
+//       const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
+//       const aiResult = await aiProvider.chat.completions.create(aiOptions);
+//       aiResponse =
+//         aiResult.choices?.[0]?.message?.content ||
+//         "I couldn't generate a response. Please try again.";
+//     } catch (aiError) {
+//       console.error("AI API error:", aiError);
+//       aiResponse =
+//         "I'm having trouble processing your request. Please try again.";
+//     }
+
+//     // Step 8: Save new chat entry
+//     try {
+//       const filePaths = uploadedFiles
+//         .map((f) => f?.file_path)
+//         .filter(Boolean)
+//         .join(",");
+//       const fileNames = uploadedFiles
+//         .map((f) => f?.file_name)
+//         .filter(Boolean)
+//         .join(",");
+
+//       await db.query(
+//         "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text,file_names) VALUES (?, ?, ?, NOW(), ?, ?, ?)",
+//         [
+//           conversation_id,
+//           userMessage, // No filename in user message
+//           aiResponse,
+//           filePaths || null,
+//           extracted_summary || null,
+//           fileNames || null,
+//         ]
+//       );
+
+//       // 🔄 Rename logic (keep same)
+//       if (userMessage) {
+//         const [rows] = await db.query(
+//           "SELECT name FROM conversations WHERE id = ?",
+//           [conversation_id]
+//         );
+
+//         const currentName = rows?.name;
+//         console.log("Current conversation name:", currentName);
+//         console.log("User message:", userMessage);
+
+//         if (currentName === "New Conversation") {
+//           const newName =
+//             userMessage.length > 20
+//               ? userMessage.substring(0, 17) + "..."
+//               : userMessage;
+
+//           console.log("Renaming conversation to:", newName);
+
+//           const [updateResult] = await db.query(
+//             "UPDATE conversations SET name = ? WHERE id = ?",
+//             [newName, conversation_id]
+//           );
+
+//           console.log("✅ Rename result:", updateResult);
+//         }
+//       }
+//     } catch (dbError) {
+//       console.error("❌ Database save error:", dbError);
+//     }
+
+//     // Step 9: Respond to frontend
+//     res.json({
+//       success: true,
+//       conversation_id,
+//       response: aiResponse,
+//       uploaded_files: uploadedFiles.map((file) => ({
+//         file_name: file.file_name,
+//         file_path: file.file_path,
+//         file_type: file.file_name?.split(".").pop()?.toLowerCase() || null,
+//       })),
+//       context: {
+//         document_available: allExtractedTexts.length > 0,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("❌ Chat controller error:", error.stack || error.message);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// };
+
+// test
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
   let { userMessage, conversation_id, extracted_summary } = req.body;
   const user_id = req.user?.user_id;
+  const uploadedFiles = req.body.uploaded_file_metadata || [];
 
   if (!user_id) {
     return res.status(401).json({ error: "Unauthorized: User ID not found." });
@@ -191,10 +399,7 @@ exports.askChatbot = async (req, res) => {
       .json({ error: "User message or extracted summary is required" });
   }
 
-  const uploadedFiles = req.body.uploaded_file_metadata || [];
-
   try {
-    // Step 1: Create new conversation if needed
     if (!conversation_id || isNaN(conversation_id)) {
       const [conversationResult] = await db.query(
         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
@@ -203,24 +408,22 @@ exports.askChatbot = async (req, res) => {
       conversation_id = conversationResult.insertId;
     }
 
-    // Step 2: Verify user owns this conversation
     const [existingConversation] = await db.query(
       "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
       [conversation_id, user_id]
     );
+
     if (!existingConversation || existingConversation.length === 0) {
-      return res
-        .status(403)
-        .json({
-          error: "Unauthorized: Conversation does not belong to the user.",
-        });
+      return res.status(403).json({
+        error: "Unauthorized: Conversation does not belong to the user.",
+      });
     }
 
-    // Step 3: Fetch full chat history
     const historyResultsRaw = await db.query(
       "SELECT user_message AS message, response, extracted_text, file_path FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
       [conversation_id]
     );
+
     const historyResults = Array.isArray(historyResultsRaw)
       ? historyResultsRaw
       : [];
@@ -233,18 +436,13 @@ exports.askChatbot = async (req, res) => {
         chatHistory.push({ role: "user", content: chat.message });
       if (chat.response)
         chatHistory.push({ role: "assistant", content: chat.response });
-
-      if (chat.extracted_text) {
-        allExtractedTexts.push(chat.extracted_text);
-      }
+      if (chat.extracted_text) allExtractedTexts.push(chat.extracted_text);
     });
 
-    // Step 4: Include new document (if any)
     if (extracted_summary && extracted_summary !== "No readable content") {
       allExtractedTexts.push(extracted_summary);
     }
 
-    // Step 5: Create system prompt
     const currentDate = new Date().toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
@@ -254,39 +452,34 @@ exports.askChatbot = async (req, res) => {
     const systemPrompt = {
       role: "system",
       content:
-        `You are an intelligent assistant. Today's date is ${currentDate}.` +
-        " You are Quantumhash, an AI assistant developed by the Quantumhash development team. " +
-        "When you were developed, you were created in 2024 by the Quantumhash development team. " +
+        `You are an intelligent assistant. Today's date is ${currentDate}. ` +
+        "You are Quantumhash, an AI assistant developed by the Quantumhash development team in 2024. " +
         "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
-        " If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team." +
-        ` If someone asks about your knowledge cutoff date, *only say*: 'I’ve got information up to the present, ${currentDate}.` +
-        "You have access to previous documents uploaded by the user during this conversation ,Use all relevant information from those documents to help answer the user's current and follow-up questions.",
+        "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+        `If someone asks about your knowledge cutoff, *only say*: 'I’ve got information up to the present, ${currentDate}.' ` +
+        "You have access to documents uploaded by the user. Use relevant content from them to answer user questions in detail.",
     };
 
-    // Step 6: Build messages array
     const finalMessages = [systemPrompt];
 
-    // Add recent 10 messages (5 user + 5 assistant)
-    const recentHistory = chatHistory.slice(-10);
-    finalMessages.push(...recentHistory);
+    finalMessages.push(...chatHistory.slice(-10));
 
-    // Add combined document context
     if (allExtractedTexts.length > 0) {
-      const combinedText = allExtractedTexts.join("\n---\n").substring(0, 5000);
+      const structuredDocs = allExtractedTexts
+        .map((text, i) => `--- Document ${i + 1} ---\n${text}`)
+        .join("\n\n");
+
       finalMessages.push({
         role: "system",
-        content: `DOCUMENT CONTEXT:\n${combinedText}${
-          combinedText.length >= 5000 ? "\n... (truncated)" : ""
+        content: `DOCUMENT CONTEXT:\n${structuredDocs.substring(0, 5000)}${
+          structuredDocs.length > 5000 ? "\n... (truncated)" : ""
         }`,
       });
     }
 
-    // Build full user message
     let fullUserMessage = userMessage || "";
     if (Array.isArray(uploadedFiles)) {
-      const fileNames = uploadedFiles
-        .map((f) => f?.file_name)
-        .filter(Boolean);
+      const fileNames = uploadedFiles.map((f) => f?.file_name).filter(Boolean);
       if (fileNames.length > 0) {
         fullUserMessage += `\n[Uploaded files: ${fileNames.join(", ")}]`;
       }
@@ -294,7 +487,6 @@ exports.askChatbot = async (req, res) => {
 
     finalMessages.push({ role: "user", content: fullUserMessage });
 
-    // Step 7: AI Response
     let aiResponse = "";
     try {
       const aiOptions = {
@@ -315,7 +507,6 @@ exports.askChatbot = async (req, res) => {
         "I'm having trouble processing your request. Please try again.";
     }
 
-    // Step 8: Save new chat entry
     try {
       const filePaths = uploadedFiles
         .map((f) => f?.file_path)
@@ -327,10 +518,10 @@ exports.askChatbot = async (req, res) => {
         .join(",");
 
       await db.query(
-        "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text,file_names) VALUES (?, ?, ?, NOW(), ?, ?, ?)",
+        "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names) VALUES (?, ?, ?, NOW(), ?, ?, ?)",
         [
           conversation_id,
-          userMessage, // No filename in user message
+          userMessage,
           aiResponse,
           filePaths || null,
           extracted_summary || null,
@@ -338,38 +529,27 @@ exports.askChatbot = async (req, res) => {
         ]
       );
 
-      // 🔄 Rename logic (keep same)
       if (userMessage) {
         const [rows] = await db.query(
           "SELECT name FROM conversations WHERE id = ?",
           [conversation_id]
         );
-
         const currentName = rows?.name;
-        console.log("Current conversation name:", currentName);
-        console.log("User message:", userMessage);
-
         if (currentName === "New Conversation") {
           const newName =
             userMessage.length > 20
               ? userMessage.substring(0, 17) + "..."
               : userMessage;
-
-          console.log("Renaming conversation to:", newName);
-
-          const [updateResult] = await db.query(
-            "UPDATE conversations SET name = ? WHERE id = ?",
-            [newName, conversation_id]
-          );
-
-          console.log("✅ Rename result:", updateResult);
+          await db.query("UPDATE conversations SET name = ? WHERE id = ?", [
+            newName,
+            conversation_id,
+          ]);
         }
       }
     } catch (dbError) {
       console.error("❌ Database save error:", dbError);
     }
 
-    // Step 9: Respond to frontend
     res.json({
       success: true,
       conversation_id,
@@ -389,13 +569,7 @@ exports.askChatbot = async (req, res) => {
   }
 };
 
-
-
-
-
-
-
-//  delete function 
+//  delete function
 
 exports.softDeleteConversation = async (req, res) => {
   const { id } = req.params;
@@ -403,18 +577,19 @@ exports.softDeleteConversation = async (req, res) => {
 
   try {
     const result = await db.query(
-      'UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?',
+      "UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?",
       [id, userId]
     );
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Conversation not found or unauthorized' });
+      return res
+        .status(404)
+        .json({ error: "Conversation not found or unauthorized" });
     }
 
     res.json({ success: true });
   } catch (error) {
-    console.error('❌ Error soft deleting conversation:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error("❌ Error soft deleting conversation:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
-
