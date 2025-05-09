@@ -381,7 +381,7 @@ exports.getChatHistory = async (req, res) => {
 //   }
 // };
 
-// test
+// test working
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
@@ -568,6 +568,208 @@ exports.askChatbot = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
+
+
+// test2 
+// exports.askChatbot = async (req, res) => {
+//   console.log("✅ Received request at /chat:", req.body);
+
+//   let { userMessage, conversation_id, extracted_summary } = req.body;
+//   const user_id = req.user?.user_id;
+//   const uploadedFiles = req.body.uploaded_file_metadata || [];
+
+//   if (!user_id) {
+//     return res.status(401).json({ error: "Unauthorized: User ID not found." });
+//   }
+
+//   if (!userMessage && !extracted_summary) {
+//     return res.status(400).json({
+//       error: "User message or extracted summary is required",
+//     });
+//   }
+
+//   try {
+//     // 1. Ensure conversation exists
+//     if (!conversation_id || isNaN(conversation_id)) {
+//       const [result] = await db.query(
+//         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+//         [user_id, userMessage?.substring(0, 20) || "New Chat"]
+//       );
+//       conversation_id = result.insertId;
+//     }
+
+//     const [existingConversation] = await db.query(
+//       "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+//       [conversation_id, user_id]
+//     );
+
+//     if (!existingConversation || existingConversation.length === 0) {
+//       return res.status(403).json({
+//         error: "Unauthorized: Conversation does not belong to the user.",
+//       });
+//     }
+
+//     // 2. Fetch and structure chat history
+//     const historyResults = await db.query(
+//       "SELECT user_message AS message, response, extracted_text, file_path FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 6",
+//       [conversation_id]
+//     );
+
+//     const chatHistory = [];
+//     const allExtractedTexts = [];
+
+//     historyResults.reverse().forEach((chat) => {
+//       if (chat.message)
+//         chatHistory.push({ role: "user", content: chat.message });
+//       if (chat.response)
+//         chatHistory.push({ role: "assistant", content: chat.response });
+//       if (chat.extracted_text)
+//         allExtractedTexts.push(chat.extracted_text);
+//     });
+
+//     if (
+//       extracted_summary &&
+//       extracted_summary !== "No readable content"
+//     ) {
+//       allExtractedTexts.push(extracted_summary);
+//     }
+
+//     // 3. Compose the prompt
+//     const currentDate = new Date().toLocaleDateString("en-US", {
+//       year: "numeric",
+//       month: "long",
+//       day: "numeric",
+//     });
+
+//     const systemPrompt = {
+//       role: "system",
+//       content:
+//         `You are an intelligent assistant. Today's date is ${currentDate}. ` +
+//         "You are Quantumhash, an AI assistant developed by the Quantumhash development team in 2024. " +
+//         "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+//         "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+//         `If someone asks about your knowledge cutoff, *only say*: 'I’ve got information up to the present, ${currentDate}.' ` +
+//         "You have access to documents uploaded by the user. Use relevant content from them to answer user questions in detail.",
+//     };
+
+//     const finalMessages = [systemPrompt, ...chatHistory];
+
+//     // Add file context
+//     if (allExtractedTexts.length > 0) {
+//       const structuredDocs = allExtractedTexts
+//         .map((text, i) => `--- Document ${i + 1} ---\n${text}`)
+//         .join("\n\n");
+
+//       finalMessages.push({
+//         role: "system",
+//         content: `DOCUMENT CONTEXT:\n${structuredDocs.slice(0, 4000)}${
+//           structuredDocs.length > 4000 ? "\n... (truncated)" : ""
+//         }`,
+//       });
+//     }
+
+//     // Add user message + filenames
+//     let fullUserMessage = userMessage || "";
+//     if (Array.isArray(uploadedFiles)) {
+//       const fileNames = uploadedFiles
+//         .map((f) => f?.file_name)
+//         .filter(Boolean);
+//       if (fileNames.length > 0) {
+//         fullUserMessage += `\n[Uploaded files: ${fileNames.join(", ")}]`;
+//       }
+//     }
+
+//     finalMessages.push({ role: "user", content: fullUserMessage });
+
+//     // 4. Call AI provider
+//     let aiResponse = "";
+//     try {
+//       const aiOptions = {
+//         model:
+//           process.env.USE_OPENAI === "true"
+//             ? "gpt-3.5-turbo"
+//             : "deepseek-chat",
+//         messages: finalMessages,
+//         temperature: 0.7,
+//         max_tokens: 1500,
+//       };
+
+//       const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
+
+//       const aiResult = await aiProvider.chat.completions.create(aiOptions);
+
+//       aiResponse =
+//         aiResult.choices?.[0]?.message?.content ||
+//         "I couldn't generate a response. Please try again.";
+//     } catch (aiError) {
+//       console.error("AI API error:", aiError);
+//       aiResponse =
+//         "I'm having trouble processing your request. Please try again.";
+//     }
+
+//     // 5. Save result to DB
+//     const filePaths = uploadedFiles
+//       .map((f) => f?.file_path)
+//       .filter(Boolean)
+//       .join(",");
+
+//     const fileNames = uploadedFiles
+//       .map((f) => f?.file_name)
+//       .filter(Boolean)
+//       .join(",");
+
+//     const saveChat = db.query(
+//       "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names) VALUES (?, ?, ?, NOW(), ?, ?, ?)",
+//       [
+//         conversation_id,
+//         userMessage,
+//         aiResponse,
+//         filePaths || null,
+//         extracted_summary || null,
+//         fileNames || null,
+//       ]
+//     );
+
+//     const [convRows] = await db.query(
+//       "SELECT name FROM conversations WHERE id = ?",
+//       [conversation_id]
+//     );
+//     const currentName = convRows?.[0]?.name;
+
+//     const updateName =
+//       currentName === "New Conversation"
+//         ? db.query("UPDATE conversations SET name = ? WHERE id = ?", [
+//             userMessage.length > 20
+//               ? userMessage.slice(0, 17) + "..."
+//               : userMessage,
+//             conversation_id,
+//           ])
+//         : null;
+
+//     await Promise.all([saveChat, updateName]);
+
+//     // 6. Respond to client
+//     res.json({
+//       success: true,
+//       conversation_id,
+//       response: aiResponse,
+//       uploaded_files: uploadedFiles.map((file) => ({
+//         file_name: file.file_name,
+//         file_path: file.file_path,
+//         file_type: file.file_name?.split(".").pop()?.toLowerCase() || null,
+//       })),
+//       context: {
+//         document_available: allExtractedTexts.length > 0,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("❌ Chat controller error:", error.stack || error.message);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// };
+
+
+
 
 //  delete function
 
