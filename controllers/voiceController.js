@@ -19,6 +19,29 @@ let deepgramReady = false;
 const storage = multer.memoryStorage();
 const upload = multer({ storage }).single("audio");
 
+// const fetch = require('node-fetch'); // Required if you're using fetch in Node <18
+
+const generateTTS = async (text, voice = 'af_heart', speed = 1.0) => {
+  try {
+    const response = await fetch('https://composed-singular-seagull.ngrok-free.app/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice, speed }),
+    });
+
+    if (!response.ok) throw new Error(`TTS failed: ${response.status}`);
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    return buffer;
+  } catch (err) {
+    console.error("❌ TTS generation failed:", err.message);
+    return null;
+  }
+};
+
+
+
 // working 
 // const handleFinalUpload = (req, res) => {
 //   upload(req, res, async (err) => {
@@ -1185,16 +1208,33 @@ const handleLiveVoiceMessage = async (ws, user_id) => {
           max_tokens: 1500,
         });
         aiResponse = aiResult.choices?.[0]?.message?.content || aiResponse;
-      } catch (err) {
-        console.error("❌ AI error:", err.message);
+               // 🔊 Generate TTS audio from AI response
+      const ttsBuffer = await generateTTS(aiResponse);
+      
+
+            if (ttsBuffer) {
+        ws.send(JSON.stringify({
+          type: "ttsAudio",
+          audio_data: ttsBuffer.toString("base64"),
+          format: "audio/wav",
+          conversation_id,
+        }));
+
+        // ⏳ Optional: Wait for audio to start playing before sending text (500ms delay)
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
 
-       
+      // 💬 Send AI text response after a short delay
       ws.send(JSON.stringify({
         type: "aiMessage",
         message: aiResponse,
         conversation_id,
       }));
+      } catch (err) {
+        console.error("❌ AI error:", err.message);
+      }
+
+      
 
       // ✅ Save only if there is a valid transcript
       if (transcript.trim().length >= 4) {
@@ -1288,7 +1328,7 @@ const handleLiveVoiceMessage = async (ws, user_id) => {
         } catch (err) {
           console.error("❌ Transcription failed:", err.message);
           isProcessing = false;
-          ws.send(JSON.stringify({ type: "aiMessage", message: "Sorry, I couldn’t process your audio. Please try again." }));
+          ws.send(JSON.stringify({ type: "aiMessage", message: "Sorry, I couldn’t get you. Can you please speak again." }));
         }
 
       } else if (data.type === "control") {
