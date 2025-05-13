@@ -2,6 +2,8 @@ const db = require("../config/db");
 const openai = require("../config/openai");
 const deepseek = require("../config/deepseek");
 const { query } = require("../config/db"); // make sure you're importing correctly
+// const tiktoken = require("tiktoken"); // Make sure tiktoken is installed
+const { encoding_for_model } = require("@dqbd/tiktoken");
 
 // ✅ Create a new conversation
 
@@ -381,7 +383,7 @@ exports.getChatHistory = async (req, res) => {
 //   }
 // };
 
-// test working
+// test working 12-05-25
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
@@ -471,8 +473,8 @@ exports.askChatbot = async (req, res) => {
 
       finalMessages.push({
         role: "system",
-        content: `DOCUMENT CONTEXT:\n${structuredDocs.substring(0, 5000)}${
-          structuredDocs.length > 5000 ? "\n... (truncated)" : ""
+        content: `DOCUMENT CONTEXT:\n${structuredDocs.substring(0, 25000)}${
+          structuredDocs.length > 25000 ? "\n... (truncated)" : ""
         }`,
       });
     }
@@ -493,7 +495,7 @@ exports.askChatbot = async (req, res) => {
         model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
         messages: finalMessages,
         temperature: 0.7,
-        max_tokens: 1500,
+        max_tokens: 7000,
       };
 
       const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
@@ -571,6 +573,20 @@ exports.askChatbot = async (req, res) => {
 
 
 // test2 
+
+
+
+// Token limit constants for DeepSeek
+// const MAX_INPUT_TOKENS = 64000;
+// const MAX_OUTPUT_TOKENS = 8000;
+
+// // Utility: estimate tokens using tiktoken
+// const estimateTokenCount = (text, model = "gpt-4") => {
+//   const encoding = encoding_for_model(model);
+//   const tokens = encoding.encode(text);
+//   return tokens.length;
+// };
+
 // exports.askChatbot = async (req, res) => {
 //   console.log("✅ Received request at /chat:", req.body);
 
@@ -583,19 +599,19 @@ exports.askChatbot = async (req, res) => {
 //   }
 
 //   if (!userMessage && !extracted_summary) {
-//     return res.status(400).json({
-//       error: "User message or extracted summary is required",
-//     });
+//     return res
+//       .status(400)
+//       .json({ error: "User message or extracted summary is required" });
 //   }
 
 //   try {
-//     // 1. Ensure conversation exists
-//     if (!conversation_id || isNaN(conversation_id)) {
-//       const [result] = await db.query(
+//     // Create new conversation if ID is missing
+//      if (!conversation_id || isNaN(conversation_id)) {
+//       const [conversationResult] = await db.query(
 //         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
 //         [user_id, userMessage?.substring(0, 20) || "New Chat"]
 //       );
-//       conversation_id = result.insertId;
+//       conversation_id = conversationResult.insertId;
 //     }
 
 //     const [existingConversation] = await db.query(
@@ -609,38 +625,39 @@ exports.askChatbot = async (req, res) => {
 //       });
 //     }
 
-//     // 2. Fetch and structure chat history
-//     const historyResults = await db.query(
-//       "SELECT user_message AS message, response, extracted_text, file_path FROM chat_history WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 6",
+//     // Fetch chat history
+//   const historyResultsRaw = await db.query(
+//       "SELECT user_message AS message, response, extracted_text, file_path FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
 //       [conversation_id]
 //     );
+
+//     const historyResults = Array.isArray(historyResultsRaw)
+//       ? historyResultsRaw
+//       : [];
+
 
 //     const chatHistory = [];
 //     const allExtractedTexts = [];
 
-//     historyResults.reverse().forEach((chat) => {
+//     historyResults.forEach((chat) => {
 //       if (chat.message)
 //         chatHistory.push({ role: "user", content: chat.message });
 //       if (chat.response)
 //         chatHistory.push({ role: "assistant", content: chat.response });
-//       if (chat.extracted_text)
-//         allExtractedTexts.push(chat.extracted_text);
+//       if (chat.extracted_text) allExtractedTexts.push(chat.extracted_text);
 //     });
 
-//     if (
-//       extracted_summary &&
-//       extracted_summary !== "No readable content"
-//     ) {
+//     if (extracted_summary && extracted_summary !== "No readable content") {
 //       allExtractedTexts.push(extracted_summary);
 //     }
 
-//     // 3. Compose the prompt
 //     const currentDate = new Date().toLocaleDateString("en-US", {
 //       year: "numeric",
 //       month: "long",
 //       day: "numeric",
 //     });
 
+//     // System prompt describing the assistant
 //     const systemPrompt = {
 //       role: "system",
 //       content:
@@ -652,28 +669,59 @@ exports.askChatbot = async (req, res) => {
 //         "You have access to documents uploaded by the user. Use relevant content from them to answer user questions in detail.",
 //     };
 
-//     const finalMessages = [systemPrompt, ...chatHistory];
+//     // Add recent chat history (start with last 10)
+//     let finalMessages = [systemPrompt];
+// let contextTokens = estimateTokenCount(systemPrompt.content);
 
-//     // Add file context
-//     if (allExtractedTexts.length > 0) {
-//       const structuredDocs = allExtractedTexts
-//         .map((text, i) => `--- Document ${i + 1} ---\n${text}`)
-//         .join("\n\n");
+// // Add document context early
+// if (allExtractedTexts.length > 0) {
+//   const structuredDocs = allExtractedTexts
+//     .map((text, i) => `--- Document ${i + 1} ---\n${text}`)
+//     .join("\n\n");
 
-//       finalMessages.push({
-//         role: "system",
-//         content: `DOCUMENT CONTEXT:\n${structuredDocs.slice(0, 4000)}${
-//           structuredDocs.length > 4000 ? "\n... (truncated)" : ""
-//         }`,
-//       });
-//     }
+//   const docTokenCount = estimateTokenCount(structuredDocs);
+//   if (contextTokens + docTokenCount < MAX_INPUT_TOKENS - MAX_OUTPUT_TOKENS) {
+//     finalMessages.push({
+//       role: "system",
+//       content: `DOCUMENT CONTEXT:\n${structuredDocs}`,
+//     });
+//     contextTokens += docTokenCount;
+//   }
+// }
 
-//     // Add user message + filenames
+// // Add recent chat history only if room remains
+// const reverseChat = [...chatHistory].reverse();
+// for (const msg of reverseChat) {
+//   const tokenCount = estimateTokenCount(msg.content);
+//   if (contextTokens + tokenCount < MAX_INPUT_TOKENS - MAX_OUTPUT_TOKENS) {
+//     finalMessages.unshift(msg);
+//     contextTokens += tokenCount;
+//   } else {
+//     break;
+//   }
+// }
+
+
+//     // Append document context if space allows
+//     // if (allExtractedTexts.length > 0) {
+//     //   const structuredDocs = allExtractedTexts
+//     //     .map((text, i) => `--- Document ${i + 1} ---\n${text}`)
+//     //     .join("\n\n");
+
+//     //   const docTokenCount = estimateTokenCount(structuredDocs);
+//     //   if (contextTokens + docTokenCount < MAX_INPUT_TOKENS - MAX_OUTPUT_TOKENS) {
+//     //     finalMessages.push({
+//     //       role: "system",
+//     //       content: `DOCUMENT CONTEXT:\n${structuredDocs}`,
+//     //     });
+//     //     contextTokens += docTokenCount;
+//     //   }
+//     // }
+
+//     // Add current user message and file names
 //     let fullUserMessage = userMessage || "";
 //     if (Array.isArray(uploadedFiles)) {
-//       const fileNames = uploadedFiles
-//         .map((f) => f?.file_name)
-//         .filter(Boolean);
+//       const fileNames = uploadedFiles.map((f) => f?.file_name).filter(Boolean);
 //       if (fileNames.length > 0) {
 //         fullUserMessage += `\n[Uploaded files: ${fileNames.join(", ")}]`;
 //       }
@@ -681,74 +729,70 @@ exports.askChatbot = async (req, res) => {
 
 //     finalMessages.push({ role: "user", content: fullUserMessage });
 
-//     // 4. Call AI provider
 //     let aiResponse = "";
 //     try {
 //       const aiOptions = {
-//         model:
-//           process.env.USE_OPENAI === "true"
-//             ? "gpt-3.5-turbo"
-//             : "deepseek-chat",
+//         model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
 //         messages: finalMessages,
 //         temperature: 0.7,
-//         max_tokens: 1500,
+//         max_tokens: MAX_OUTPUT_TOKENS,
 //       };
 
 //       const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
-
 //       const aiResult = await aiProvider.chat.completions.create(aiOptions);
-
 //       aiResponse =
 //         aiResult.choices?.[0]?.message?.content ||
 //         "I couldn't generate a response. Please try again.";
 //     } catch (aiError) {
-//       console.error("AI API error:", aiError);
+//       console.error("❌ AI API error:", aiError);
 //       aiResponse =
 //         "I'm having trouble processing your request. Please try again.";
 //     }
 
-//     // 5. Save result to DB
-//     const filePaths = uploadedFiles
-//       .map((f) => f?.file_path)
-//       .filter(Boolean)
-//       .join(",");
+//     // Save to DB
+//     try {
+//       const filePaths = uploadedFiles
+//         .map((f) => f?.file_path)
+//         .filter(Boolean)
+//         .join(",");
+//       const fileNames = uploadedFiles
+//         .map((f) => f?.file_name)
+//         .filter(Boolean)
+//         .join(",");
 
-//     const fileNames = uploadedFiles
-//       .map((f) => f?.file_name)
-//       .filter(Boolean)
-//       .join(",");
+//       await db.query(
+//         "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names) VALUES (?, ?, ?, NOW(), ?, ?, ?)",
+//         [
+//           conversation_id,
+//           userMessage,
+//           aiResponse,
+//           filePaths || null,
+//           extracted_summary || null,
+//           fileNames || null,
+//         ]
+//       );
 
-//     const saveChat = db.query(
-//       "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names) VALUES (?, ?, ?, NOW(), ?, ?, ?)",
-//       [
-//         conversation_id,
-//         userMessage,
-//         aiResponse,
-//         filePaths || null,
-//         extracted_summary || null,
-//         fileNames || null,
-//       ]
-//     );
-
-//     const [convRows] = await db.query(
-//       "SELECT name FROM conversations WHERE id = ?",
-//       [conversation_id]
-//     );
-//     const currentName = convRows?.[0]?.name;
-
-//     const updateName =
-//       currentName === "New Conversation"
-//         ? db.query("UPDATE conversations SET name = ? WHERE id = ?", [
+//       // Auto-rename new conversation
+//       if (userMessage) {
+//         const [[{ name } = {}] = []] = await db.query(
+//           "SELECT name FROM conversations WHERE id = ?",
+//           [conversation_id]
+//         );
+//         if (name === "New Conversation") {
+//           const newName =
 //             userMessage.length > 20
-//               ? userMessage.slice(0, 17) + "..."
-//               : userMessage,
+//               ? userMessage.substring(0, 17) + "..."
+//               : userMessage;
+//           await db.query("UPDATE conversations SET name = ? WHERE id = ?", [
+//             newName,
 //             conversation_id,
-//           ])
-//         : null;
+//           ]);
+//         }
+//       }
+//     } catch (dbError) {
+//       console.error("❌ DB error while saving chat:", dbError);
+//     }
 
-//     await Promise.all([saveChat, updateName]);
-
-//     // 6. Respond to client
 //     res.json({
 //       success: true,
 //       conversation_id,
@@ -767,6 +811,7 @@ exports.askChatbot = async (req, res) => {
 //     res.status(500).json({ error: "Internal server error" });
 //   }
 // };
+
 
 
 

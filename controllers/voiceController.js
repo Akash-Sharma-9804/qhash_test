@@ -1205,7 +1205,7 @@ const handleLiveVoiceMessage = async (ws, user_id) => {
           model,
           messages: finalMessages,
           temperature: 0.7,
-          max_tokens: 1500,
+          max_tokens: 6000,
         });
         aiResponse = aiResult.choices?.[0]?.message?.content || aiResponse;
                // 🔊 Generate TTS audio from AI response
@@ -1299,7 +1299,7 @@ const handleLiveVoiceMessage = async (ws, user_id) => {
         isProcessing = true;
 
         try {
-          const response = await fetch("https://purely-darling-finch.ngrok-free.app/transcribe", {
+          const response = await fetch("https://clean-guided-gar.ngrok-free.app/transcribe", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ audio_data: data.audio_data })

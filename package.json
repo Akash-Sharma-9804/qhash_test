@@ -13,6 +13,7 @@
   "license": "ISC",
   "dependencies": {
     "@deepgram/sdk": "^3.12.1",
+    "@dqbd/tiktoken": "^1.0.21",
     "@mistralai/mistralai": "^1.5.2",
     "axios": "^1.8.4",
     "basic-ftp": "^5.0.5",
