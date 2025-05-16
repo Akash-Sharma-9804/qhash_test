@@ -63,7 +63,8 @@ const cookieParser = require("cookie-parser");
 const http = require("http");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
-
+// const cron = require('node-cron');
+// const { cleanupOtps } = require('./controllers/authController');
 const authRoutes = require("./routes/authRoutes");
 const fileRoutes = require("./routes/fileRoutes");
 const chatRoutes = require("./routes/chatRoutes");
@@ -112,6 +113,17 @@ app.use((err, req, res, next) => {
   console.error("Server Error:", err);
   res.status(500).json({ message: "Internal Server Error" });
 });
+
+// Run every 15 minutes (adjust as needed)
+// cron.schedule('*/20 * * * *', () => {
+//   console.log("🕒 Running OTP cleanup cron job...");
+//   await cleanupOtps();
+// });
+// cron.schedule('*/07 * * * *', async () => {
+//   console.log(`🕒 [${new Date().toLocaleString()}] Running OTP cleanup...`);
+//   await cleanupOtps();
+// });
+
 
 // ✅ Create HTTP server for Express + WebSocket
 const server = http.createServer(app);

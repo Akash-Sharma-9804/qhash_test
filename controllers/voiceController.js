@@ -1140,25 +1140,9 @@ const handleLiveVoiceMessage = async (ws, user_id) => {
     message: transcript,
     conversation_id,
   }));
-
   // ✅ Tell frontend we're processing response
     ws.send(JSON.stringify({ type: "processing", status: "started" }));
-
     try {
-      // ✅ Create new conversation if needed
-      // if (!conversation_id) {
-      //   const title = transcript.length > 50 ? transcript.substring(0, 47) + "..." : transcript;
-      //   const [result] = await db.query(
-      //     "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-      //     [user_id, title]
-      //   );
-      //   conversation_id = result.insertId;
-      //   ws.send(JSON.stringify({
-      //     type: "conversation_created",
-      //     conversation_id,
-      //   }));
-      // }
-
       // 🔄 Load previous chat history
       const [rows] = await db.query(
         `SELECT user_message, response, extracted_text
