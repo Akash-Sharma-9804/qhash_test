@@ -104,7 +104,7 @@ const handleFinalUpload = (req, res) => {
 
     const buffer = req.file.buffer;
     const fileName = `${uuidv4()}_${req.file.originalname}`;
-    const ftpPath = "/fileuploads/audio";
+    const ftpPath = "/public_html/fileuploads/audio";
 
     try {
       // Upload audio to FTP

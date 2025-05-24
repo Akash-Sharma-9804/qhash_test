@@ -60,15 +60,20 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const session = require("express-session");
+
 const http = require("http");
 const { WebSocketServer } = require("ws");
 const jwt = require("jsonwebtoken");
+const passport = require("passport");
+require("./config/passport"); // <- Make sure this is loaded
 // const cron = require('node-cron');
 // const { cleanupOtps } = require('./controllers/authController');
 const authRoutes = require("./routes/authRoutes");
 const fileRoutes = require("./routes/fileRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const voiceRoutes = require("./routes/voiceRoutes");
+const middleware = require("./middleware/authMiddleware");
 // const { handleLiveVoiceMessage } = require("./controllers/voiceController");
 const { handleLiveVoiceMessage } = require("./controllers/voiceController");
 
@@ -98,6 +103,21 @@ app.options("*", cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "keyboard_cat", // keep this secret in env
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: false, // true if using HTTPS
+      httpOnly: true,
+      maxAge: 24 * 60 * 60 * 1000, // 1 day
+    },
+  })
+);
+
+app.use(passport.initialize());
+app.use(passport.session()); // <-- critical for Google login to persist user
 
 // ✅ Routes
 app.use("/api/auth", authRoutes);

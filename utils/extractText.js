@@ -9,10 +9,11 @@ const xlsx = require("xlsx");
 const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
 const extractText = async (buffer, mimeType, ftpUrl) => {
+  console.log("🔄 ftpurl",ftpUrl);
   try {
     // ✅ OCR for PDFs and images using public URL
     if (mimeType === "application/pdf" || mimeType.startsWith("image/")) {
-      const documentUrl = `https://qhashai.com/${ftpUrl}`;
+      const documentUrl = `https://qhashai.com${ftpUrl}`;
       console.log("🔗 Document URL:", documentUrl);
 
       try {

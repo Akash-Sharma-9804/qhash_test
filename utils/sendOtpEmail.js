@@ -4,7 +4,7 @@
   const transporter = nodemailer.createTransport({
     host: process.env.MAILTRAP_HOST,
     port: parseInt(process.env.MAILTRAP_PORT),
-    secure: false, // STARTTLS
+    secure: true, // STARTTLS
     auth: {
       user: process.env.MAILTRAP_USER,
       pass: process.env.MAILTRAP_PASS
@@ -22,7 +22,7 @@
         
        <!-- Header -->
 <div style="background: linear-gradient(135deg, #2f80ed, #eb5757); padding: 35px 20px; text-align: center;">
-  <img src="https://qhashai.com/ai/logo.png" alt="Quantum AI Logo" width="60" style="margin-bottom: 15px;" />
+  <img src="https://qhashai.com/logo.png" alt="Quantum AI Logo" width="60" style="margin-bottom: 15px;" />
   <h1 style="margin: 0; font-size: 26px; color: #ffffff; font-weight: bold; font-family: 'Segoe UI', sans-serif;">
     Quantum AI Verification Code
   </h1>
