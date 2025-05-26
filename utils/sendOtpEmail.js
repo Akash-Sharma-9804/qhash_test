@@ -13,7 +13,7 @@
 
   exports.sendOtpEmail = async (to, otp) => {
     const info = await transporter.sendMail({
-      from: `"Quantum AI" ${process.env.MAILTRAP_USER}`,
+      from: `"no-reply_quantumAi" ${process.env.MAILTRAP_USER}`,
       to,
       subject: "Your OTP Code",
       text: `Your OTP code is ${otp}. It will expire in 5 minutes.`,
