@@ -38,7 +38,8 @@ router.get("/google/callback", (req, res, next) => {
   passport.authenticate("google", { session: false }, async (err, user, info) => {
     if (err || !user) {
       console.error("❌ Authentication failed:", err || "No user returned");
-      return res.redirect(`${process.env.CLIENT_URL}/login`);
+      const errorMessage = encodeURIComponent( err?.message || "Google authentication failed. Please try again.");
+      return res.redirect(`${process.env.CLIENT_URL}/login?error=${errorMessage}`);
     }
 
     req.user = user;

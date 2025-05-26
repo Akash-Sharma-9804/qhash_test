@@ -70,7 +70,9 @@
  
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
-const db = require("./db");
+const { getAccountValidityDates } = require("../utils/dateUtils");
+// const db = require("./db");
+const { db, query } = require("../config/db"); 
 require("dotenv").config();
 
 passport.use(new GoogleStrategy({
@@ -85,20 +87,33 @@ passport.use(new GoogleStrategy({
     const username = profile.displayName;
     const userImg = profile.photos[0]?.value || null;
     const firstName = profile.name?.givenName || null;  // Fetch given name for first name
-
+const lastName = profile.name?.familyName || null;
+  const { created_on, valid_till } = getAccountValidityDates();
     console.log("🔍 Checking if user exists in DB...");
 
     // STEP 1: Check if user already exists
-    const result = await db.query("SELECT * FROM users WHERE email = ?", [email]);
+    const result = await db.query("SELECT * FROM users WHERE email = ?",  [email]);
     const existingUsers = Array.isArray(result[0]) ? result[0] : result;
 
     if (existingUsers.length > 0) {
       const existingUser = existingUsers[0];
 
+       const now = new Date();
+      const validTill = new Date(existingUser.valid_till);
+
+      if (existingUser.is_active !== 1 || validTill <= now) {
+        console.log("⛔ User is inactive or account validity expired.");
+        return done(
+          new Error("Account is either inactive or expired. Please contact support."),
+          null
+        );
+      }
+
       // STEP 2: If user exists, update missing fields (user_img, first_name)
       const updatedUser = {
         user_img: existingUser.user_img || userImg,  // Only update if missing
         first_name: existingUser.first_name || firstName,  // Only update if missing
+        
       };
 
       // Only update if any of the fields are missing
@@ -109,32 +124,88 @@ passport.use(new GoogleStrategy({
         );
         console.log("✅ User image and/or first name updated.");
       }
+ 
+     
 
-      // Return the updated user
+
+
+// STEP 3: Check if profile exists
+      const [profiles] = await db.query("SELECT * FROM users_profile WHERE user_id = ?", [existingUser.id]);
+
+      if (profiles.length === 0) {
+        await db.query(
+          `INSERT INTO users_profile 
+          (user_id, first_name, last_name, email, img_path)
+          VALUES (?, ?, ?, ?, ?)`,
+          [
+            existingUser.id,
+            firstName,
+            lastName,
+            email,
+            userImg,
+            
+          ]
+        );
+        console.log("✅ users_profile inserted for existing user.");
+      } else {
+        console.log("ℹ️ users_profile already exists.");
+      }
+
       return done(null, { ...existingUser, ...updatedUser });
+     
     } else {
       console.log("🆕 User does not exist. Proceeding to insert.");
 
-      // STEP 3: If the user doesn't exist, insert the user into the database
-      await Promise.resolve();
+     
 
-      const [insertResult] = await db.query(
-        "INSERT INTO users (username, email, user_img, first_name) VALUES (?, ?, ?, ?)",
-        [username, email, userImg, firstName] // Use Google first_name
-      );
+ const connection = await db.getConnection();
+      try {
+        await connection.beginTransaction();
 
-      const insertedUserId = insertResult.insertId;
-      console.log("✅ New user inserted with ID:", insertedUserId);
+        // STEP 3: Insert user into `users`
+        const [insertResult] = await connection.query(
+          `INSERT INTO users (username, email, user_img, first_name, sign_type_id, created_on, valid_till, is_active, role_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [username, email, userImg, firstName, 2, created_on, valid_till, 1, 1]
+        );
 
-      // STEP 4: Fetch newly inserted user
-      const [newUserRows] = await db.query("SELECT * FROM users WHERE id = ?", [insertedUserId]);
+        const insertedUserId = insertResult.insertId;
+        console.log("✅ New user inserted with ID:", insertedUserId);
 
-      return done(null, newUserRows[0]);
+        // STEP 4: Insert user profile into `users_profile`
+        await connection.query(
+          `INSERT INTO users_profile 
+           (user_id, first_name, last_name, email, img_path)
+           VALUES (?, ?, ?, ?, ?)`,
+          [
+            insertedUserId,
+            firstName,
+            lastName,
+            email,
+            userImg,
+          ]
+        );
+        console.log("✅ User profile created in users_profile table.");
+
+        await connection.commit();
+        connection.release();
+
+       // STEP 5: Fetch newly inserted user
+        const [newUserRows] = await db.query("SELECT * FROM users WHERE id = ?", [insertedUserId]);
+        return done(null, newUserRows[0]);
+
+      } catch (err) {
+        await connection.rollback();
+        connection.release();
+        console.error("❌ Transaction failed:", err);
+        return done(new Error("Transaction failed while creating new user."), null);
+      }
     }
+
 
   } catch (error) {
     console.error("❌ Error in Google Strategy:", error);
-    return done(error, null);
+     return done(new Error("Unhandled error in Google strategy."), null);
   }
 }));
 
@@ -147,6 +218,6 @@ passport.deserializeUser(async (id, done) => {
     console.log("📦 Deserialized user:", rows[0]); // <- check this!
     done(null, rows[0]);
   } catch (err) {
-    done(err, null);
+   done(new Error("Error deserializing user."), null);
   }
 });

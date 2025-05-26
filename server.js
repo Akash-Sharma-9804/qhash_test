@@ -56,6 +56,8 @@
 // });
 
 // test working
+global.ReadableStream = require('stream/web').ReadableStream;
+
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");

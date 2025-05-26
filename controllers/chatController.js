@@ -7,6 +7,110 @@ const { encoding_for_model } = require("@dqbd/tiktoken");
 
 // ✅ Create a new conversation
 
+// exports.createConversation = async (req, res) => {
+//   const user_id = req.user?.user_id;
+//   if (!user_id) {
+//     return res.status(400).json({ error: "User ID is required" });
+//   }
+
+//   try {
+//     const name = req.body.name || "New Conversation";
+//     console.log("📥 Incoming request body:", req.body);
+
+//     // 🔍 Execute database query
+//     const result = await db.query(
+//       "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+//       [user_id, name]
+//     );
+
+//     console.log("🔍 DB Query Result:", result);
+
+//     // ✅ Ensure result has insertId
+//     if (!result || !result.insertId) {
+//       console.error("❌ Unexpected DB response format:", result);
+//       return res
+//         .status(500)
+//         .json({ error: "Database query returned invalid response" });
+//     }
+
+//     const conversation_id = result.insertId; // ✅ Directly accessing insertId
+//     console.log("✅ New conversation created with ID:", conversation_id);
+
+//     return res.status(201).json({
+//       success: true,
+//       conversation_id,
+//       name,
+//     });
+//   } catch (error) {
+//     console.error("❌ Error creating conversation:", error.message);
+//     res
+//       .status(500)
+//       .json({ error: "Failed to create conversation", details: error.message });
+//   }
+// };
+
+// exports.createConversation = async (req, res) => {
+//   const user_id = req.user?.user_id;
+//   if (!user_id) {
+//     return res.status(400).json({ error: "User ID is required" });
+//   }
+
+//   try {
+//     const defaultName = "New Conversation";
+//     console.log("📥 Incoming request body:", req.body);
+
+//     // Step 1: Check if an empty (blank) conversation already exists
+//     const [emptyConversations] = await db.query(
+//       `SELECT c.id, c.name
+//        FROM conversations c
+//        LEFT JOIN chat_history ch ON c.id = ch.conversation_id
+//        WHERE c.user_id = ?
+//        GROUP BY c.id
+//        HAVING COUNT(ch.id) = 0
+//        ORDER BY c.created_at DESC
+//        LIMIT 1`,
+//       [user_id]
+//     );
+
+//     // Handle case when no blank conversations exist
+//     if (!emptyConversations || emptyConversations.length === 0) {
+//       // Step 2: Create a new conversation if no empty ones exist
+//       const name = req.body.name || defaultName;
+//       const [newConversation] = await db.query(
+//         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+//         [user_id, name]
+//       );
+
+//       const conversation_id = newConversation.insertId;
+//       console.log("✅ Created new conversation:", conversation_id);
+
+//       return res.status(201).json({
+//         success: true,
+//         conversation_id,
+//         name,
+//       });
+//     } else {
+//       // Step 3: Reuse existing blank conversation
+//       const conversation_id = emptyConversations[0].id;
+//       const name = emptyConversations[0].name;
+//       console.log("🔄 Reused empty conversation:", conversation_id);
+
+//       return res.status(200).json({
+//         success: true,
+//         conversation_id,
+//         name,
+//       });
+//     }
+
+//   } catch (error) {
+//     console.error("❌ Error creating conversation:", error.message);
+//     return res.status(500).json({
+//       error: "Failed to create or reuse conversation",
+//       details: error.message,
+//     });
+//   }
+// };
+
 exports.createConversation = async (req, res) => {
   const user_id = req.user?.user_id;
   if (!user_id) {
@@ -14,40 +118,91 @@ exports.createConversation = async (req, res) => {
   }
 
   try {
-    const name = req.body.name || "New Conversation";
+    const defaultName = "New Conversation";
     console.log("📥 Incoming request body:", req.body);
 
-    // 🔍 Execute database query
-    const result = await db.query(
+    // Step 1: Find the most recent conversation for this user
+    const recentConversationResult = await db.query(
+      `SELECT id, name FROM conversations 
+       WHERE user_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [user_id]
+    );
+
+    let recentConversation;
+    if (Array.isArray(recentConversationResult)) {
+      recentConversation = recentConversationResult[0];
+    } else if (recentConversationResult && Array.isArray(recentConversationResult[0])) {
+      recentConversation = recentConversationResult[0][0];
+    }
+
+    if (recentConversation) {
+      // Step 2: Check if this conversation has any messages
+      const messageCountResult = await db.query(
+        `SELECT COUNT(*) as count FROM chat_history WHERE conversation_id = ?`,
+        [recentConversation.id]
+      );
+
+      let messageCount;
+      if (Array.isArray(messageCountResult)) {
+        messageCount = messageCountResult[0]?.count || 0;
+      } else if (messageCountResult && Array.isArray(messageCountResult[0])) {
+        messageCount = messageCountResult[0][0]?.count || 0;
+      }
+
+      // If no messages, reuse this conversation
+      if (messageCount === 0) {
+        console.log("🔄 Reused empty conversation:", recentConversation.id);
+        return res.status(200).json({
+          success: true,
+          conversation_id: recentConversation.id,
+          name: recentConversation.name,
+          action: "reused"
+        });
+      }
+    }
+
+    // Step 3: Create new conversation if none exists or recent one has messages
+    const name = req.body.name || defaultName;
+    const newConversationResult = await db.query(
       "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
       [user_id, name]
     );
 
-    console.log("🔍 DB Query Result:", result);
-
-    // ✅ Ensure result has insertId
-    if (!result || !result.insertId) {
-      console.error("❌ Unexpected DB response format:", result);
-      return res
-        .status(500)
-        .json({ error: "Database query returned invalid response" });
+    let conversation_id;
+    if (Array.isArray(newConversationResult)) {
+      conversation_id = newConversationResult[0].insertId;
+    } else if (newConversationResult && newConversationResult.insertId) {
+      conversation_id = newConversationResult.insertId;
+    } else {
+      throw new Error("Failed to get insert ID");
     }
 
-    const conversation_id = result.insertId; // ✅ Directly accessing insertId
-    console.log("✅ New conversation created with ID:", conversation_id);
+    console.log("✅ Created new conversation:", conversation_id);
 
     return res.status(201).json({
       success: true,
       conversation_id,
       name,
+      action: "created"
     });
+
   } catch (error) {
-    console.error("❌ Error creating conversation:", error.message);
-    res
-      .status(500)
-      .json({ error: "Failed to create conversation", details: error.message });
+    console.error("❌ Error creating conversation:", error);
+    console.error("❌ Error stack:", error.stack);
+    return res.status(500).json({
+      error: "Failed to create or reuse conversation",
+      details: error.message,
+    });
   }
 };
+
+
+
+
+
+
 
 // ✅ Get all conversations for a user
 
@@ -570,6 +725,181 @@ exports.askChatbot = async (req, res) => {
 };
 
 
+// guestchat 
+
+
+
+// exports.guestChat = async (req, res) => {
+//   const { userMessage } = req.body;
+
+//   if (!userMessage || typeof userMessage !== "string") {
+//     return res.status(400).json({ error: "Message is required." });
+//   }
+
+//   try {
+//     const currentDate = new Date().toLocaleDateString("en-US", {
+//       year: "numeric",
+//       month: "long",
+//       day: "numeric",
+//     });
+
+//     const systemPrompt = {
+//       role: "system",
+//       content:
+//         `You are an intelligent assistant. Today's date is ${currentDate}. ` +
+//         "You are Quantumhash, an AI assistant developed by the Quantumhash development team in 2024. " +
+//         "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+//         "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+//         `If someone asks about your knowledge cutoff, *only say*: 'I’ve got information up to the present, ${currentDate}.'`,
+//     };
+
+//     const messages = [
+//       systemPrompt,
+//       { role: "user", content: userMessage }
+//     ];
+
+//     const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
+
+//     const aiResult = await aiProvider.chat.completions.create({
+//       model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
+//       messages,
+//       temperature: 0.7,
+//       max_tokens: 1500,
+//     });
+
+//     const aiResponse =
+//       aiResult.choices?.[0]?.message?.content || "I couldn't generate a response.";
+
+//     // 🔁 Suggested questions generation
+//     let suggestions = [];
+//     try {
+//       const suggestionPrompt = [
+//         {
+//           role: "system",
+//           content:
+//             "You are a thoughtful and helpful assistant. Based on the user's last message and your reply, generate 3 engaging follow-up questions. Keep them relevant and user-friendly. Reply ONLY with the 3 questions in a numbered list.",
+//         },
+//         { role: "user", content: userMessage },
+//         { role: "assistant", content: aiResponse },
+//       ];
+
+//       const suggestionResult = await aiProvider.chat.completions.create({
+//         model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
+//         messages: suggestionPrompt,
+//         temperature: 0.7,
+//         max_tokens: 300,
+//       });
+
+//       const rawSuggestion = suggestionResult.choices?.[0]?.message?.content || "";
+//       suggestions = rawSuggestion
+//         .split("\n")
+//         .map((s) => s.replace(/^[\d\-•\s]+/, "").trim())
+//         .filter(Boolean)
+//         .slice(0, 3);
+//     } catch (suggestionError) {
+//       console.error("⚠️ Suggestion generation failed:", suggestionError.message);
+//     }
+
+//     return res.json({
+//       success: true,
+//       response: aiResponse,
+//       suggestions,
+//     });
+//   } catch (error) {
+//     console.error("❌ Guest chat error:", error.stack || error.message);
+//     res.status(500).json({ error: "Internal server error." });
+//   }
+// };
+
+exports.guestChat = async (req, res) => {
+ const { userMessage } = req.body;
+if (!userMessage || typeof userMessage !== "string") {
+  return res.status(400).json({ error: "Message is required." });
+}
+
+
+  try {
+    // 📅 Get current date in "Month Day, Year" format
+    const currentDate = new Date().toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+
+    // 🧠 System prompt defining assistant identity and behavior
+    const systemPrompt = {
+      role: "system",
+      content: 
+        `You are an intelligent assistant. Today's date is ${currentDate}. ` +
+        "You are Quantumhash, an AI assistant developed by the Quantumhash development team in 2024. " +
+        "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
+        "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
+        `If someone asks about your knowledge cutoff, *only say*: 'I’ve got information up to the present, ${currentDate}.'`,
+    };
+
+    const messages = [
+      systemPrompt,
+      { role: "user", content: userMessage },
+    ];
+
+    // 🔀 Choose AI provider based on environment config
+    const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
+    const model = process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat";
+
+    // 💬 Get AI response
+    const aiResult = await aiProvider.chat.completions.create({
+      model,
+      messages,
+      temperature: 0.7,
+      max_tokens: 1500,
+    });
+
+    const aiResponse = aiResult.choices?.[0]?.message?.content || "I couldn't generate a response.";
+
+    // 🤖 Generate suggested follow-up questions
+    let suggestions = [];
+    try {
+      const suggestionPrompt = [
+        {
+          role: "system",
+          content:
+            "You are a thoughtful and helpful assistant. Based on the user's last message and your reply, generate 3 engaging follow-up questions. Keep them relevant and user-friendly. Reply ONLY with the 3 questions in a numbered list.",
+        },
+        { role: "user", content: userMessage },
+        { role: "assistant", content: aiResponse },
+      ];
+
+      const suggestionResult = await aiProvider.chat.completions.create({
+        model,
+        messages: suggestionPrompt,
+        temperature: 0.7,
+        max_tokens: 300,
+      });
+
+      const rawSuggestion = suggestionResult.choices?.[0]?.message?.content || "";
+
+      // 🧹 Parse suggestions from numbered list
+      suggestions = rawSuggestion
+        .split("\n")
+        .map((s) => s.replace(/^[\d\-\•\s]+/, "").trim()) // Remove numbering/bullets
+        .filter(Boolean)
+        .slice(0, 3); // Limit to top 3
+    } catch (suggestionError) {
+      console.error("⚠️ Failed to generate suggestions:", suggestionError.message);
+    }
+
+    // ✅ Send successful response
+    return res.json({
+      success: true,
+      response: aiResponse,
+      suggestions,
+    });
+  } catch (error) {
+    // ❌ Catch unexpected errors
+    console.error("❌ Guest chat error:", error.stack || error.message);
+    return res.status(500).json({ error: "Internal server error." });
+  }
+};
 
 
 

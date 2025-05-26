@@ -6,7 +6,8 @@ const {
     getConversations,
     getConversationHistory,
     softDeleteConversation,
-    updateConversationName
+    updateConversationName,
+    guestChat,
 } = require("../controllers/chatController");
 const authMiddleware = require("../middleware/authMiddleware");
 
@@ -23,6 +24,8 @@ router.get("/conversations/:conversation_id", authMiddleware, getConversationHis
 
 // ✅ Handle chatbot interaction (POST request)
 router.post("/", authMiddleware, askChatbot); 
+
+router.post("/guest-chat", guestChat);
 
 // ✅ Fetch general chat history for the authenticated user
 router.get("/history", authMiddleware, getChatHistory);
