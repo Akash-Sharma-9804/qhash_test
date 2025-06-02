@@ -31,9 +31,9 @@ const PORT = process.env.PORT || 3000;
 
 // ✅ Allowed origins for both local & production
 const allowedOrigins = [
-  "http://localhost:5173",          // Local dev
+  "http://localhost:5174",          // Local dev
 //  "https://composed-singular-seagull.ngrok-free.app/stream", // Your ngrok URL
-  "https://qhashai.com", // Your production frontend domain
+  "https://qhash-test-frontend.vercel.app/", // Your production frontend domain
   "*"
 ];
 
