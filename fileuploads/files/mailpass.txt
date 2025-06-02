@@ -1,0 +1,15 @@
+Kolkata123456@@
+noreply@qhashai.com
+
+Kolkata123456@@
+
+dev-hawzwpteqyql8iul
+
+dev-hawzwpteqyql8iul.us.auth0.com
+
+
+client id zDnQ66wgp7tGjLea1buEPiuvNyEM4NLV
+client sec Ar3x63-_5VlnqxsP9LWuTOA-KAb2kPcyUUj9TGTPWQcYS-5jYRFH-YoraOP7C8tx
+
+
+https://qhashai.com/ai/, http://localhost:5173/ai/, http://localhost:5173, https://qhashai.com

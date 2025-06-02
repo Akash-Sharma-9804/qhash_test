@@ -1,61 +1,8 @@
 
 
-// require("dotenv").config();
-// const express = require("express");
-// const cors = require("cors");
-// const cookieParser = require("cookie-parser");
-
-// const authRoutes = require("./routes/authRoutes");
-// const fileRoutes = require("./routes/fileRoutes");
-// const chatRoutes = require("./routes/chatRoutes");
-
-// const app = express();
-// const PORT = process.env.PORT || 5001;
-
-// // ✅ Allowed origins for both local & production
-// const allowedOrigins = [
-//   "http://localhost:5173",     // Local dev
-//   "https://quantumhash.me"     // Production domain
-// ];
-
-// // ✅ CORS middleware (basic setup)
-// const corsOptions = {
-//   origin: allowedOrigins,
-//   credentials: true,
-//   methods: ["GET", "POST", "PUT",'PATCH', "DELETE", "OPTIONS"],
-//   allowedHeaders: ["Content-Type", "Authorization", "Accept", "Origin"], // Ensure 'Origin' is included
-// };
-
-// // ✅ Apply CORS to all routes
-// app.use(cors(corsOptions));
-
-// // ✅ Manually handle preflight (OPTIONS) requests — crucial for Render
-// app.options("*", cors(corsOptions));
-
-// // ✅ Middleware
-// app.use(express.json());
-// app.use(cookieParser());
-
-// // ✅ Routes
-// app.use("/api/auth", authRoutes);
-// app.use("/api/files", fileRoutes);
-// app.use("/api/chat", chatRoutes);
-
-// // ✅ Base route
-// app.get("/", (req, res) => res.send("🚀 Server is running..."));
-
-// // ✅ Global Error Handler
-// app.use((err, req, res, next) => {
-//   console.error("Server Error:", err);
-//   res.status(500).json({ message: "Internal Server Error" });
-// });
-
-// // ✅ Start Server
-// app.listen(PORT, () => {
-//   console.log(`🚀 Server running on http://localhost:${PORT}`);
-// });
-
 // test working
+global.fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
 global.ReadableStream = require('stream/web').ReadableStream;
 
 require("dotenv").config();
@@ -80,22 +27,34 @@ const middleware = require("./middleware/authMiddleware");
 const { handleLiveVoiceMessage } = require("./controllers/voiceController");
 
 const app = express();
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 3000;
 
 // ✅ Allowed origins for both local & production
 const allowedOrigins = [
   "http://localhost:5173",          // Local dev
 //  "https://composed-singular-seagull.ngrok-free.app/stream", // Your ngrok URL
-  "https://qhashai.com" // Your production frontend domain
+  "https://qhashai.com", // Your production frontend domain
+  "*"
 ];
 
 // ✅ CORS middleware (basic setup)
+// const corsOptions = {
+//   origin: allowedOrigins,
+//   credentials: true,
+//   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+//   allowedHeaders: ["Content-Type", "Authorization", "Accept", "Origin"],
+// };
+
 const corsOptions = {
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    // Allow all origins, including undefined (for tools like Postman)
+    callback(null, origin || "*");
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "Accept", "Origin"],
 };
+
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
@@ -128,7 +87,7 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/voice", voiceRoutes); // ⬅️ Added voice route
 
 // ✅ Base route
-app.get("/", (req, res) => res.send("🚀 Server is running..."));
+app.get("/", (req, res) => res.send("Welcome to QhashAi! "));
 
 // ✅ Global Error Handler
 app.use((err, req, res, next) => {

@@ -1,0 +1,22 @@
+RewriteEngine on
+
+AddType application/pdf pdf
+
+RewriteCond %{HTTP_REFERER} !^http://api.qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^http://api.qhashai.com$      [NC]
+RewriteCond %{HTTP_REFERER} !^http://qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^http://qhashai.com$      [NC]
+RewriteCond %{HTTP_REFERER} !^http://www.api.qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^http://www.api.qhashai.com$      [NC]
+RewriteCond %{HTTP_REFERER} !^http://www.qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^http://www.qhashai.com$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://api.qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://api.qhashai.com$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://qhashai.com$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://www.api.qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://www.api.qhashai.com$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://www.qhashai.com/.*$      [NC]
+RewriteCond %{HTTP_REFERER} !^https://www.qhashai.com$      [NC]
+RewriteRule .*\.(jpg|jpeg|gif|png|bmp)$ - [F,NC]
+

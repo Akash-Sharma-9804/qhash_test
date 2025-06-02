@@ -1,0 +1,29 @@
+forgot password
+
+akash@gmail.com 
+
+email :: [ akash@gmail.com ]
+	 [Reset Password]
+
+[An OTP has been Sent to your Email]
+	otp :: [ _ _ _ _ _ ]
+		[validate] :: 
+		logic::
+		session[email_validate]: email:'email,'otp':'otp','timer_start':'12:00:00' 
+
+		$r->email , $r->otp , Timer,
+
+	New password: [  ]
+	Confirm Password: [ ]
+		[Update Password]
+		logic ::
+		$r->email :: session-> email 
+		$r->otp :: session -> otp
+		$r->time :: session->time [ 20 minutes ]
+	
+		$new :: $confirm 		
+
+		$r->email:: id :: update the password
+
+:: dashboard ::
+

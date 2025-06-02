@@ -135,9 +135,9 @@ exports.sendOtpEmail = async (to, otp, purpose = "signup", sign_type_id = 1) => 
  // Append social sign-in note for forgotPassword
   if (isReset) {
     if (sign_type_id === 2) {
-      html += `<p style="margin-top:10px;color:#555;">Note: You previously signed in using <strong>Google</strong>. After resetting your password, you can log in using email and password. You can also manage passwor options in your profile settings.</p>`;
+      html += `<p style="margin-top:10px;color:#555;">Note: You previously signed in using <strong>Google</strong>. After resetting your password, you can log in using your email and password. You can also manage password options in your profile settings.</p>`;
     } else if (sign_type_id === 3) {
-      html += `<p style="margin-top:10px;color:#555;">Note: You previously signed in using <strong>Facebook</strong>. After resetting your password, you can log in using email and password. You can also manage passwor options in your profile settings.</p>`;
+      html += `<p style="margin-top:10px;color:#555;">Note: You previously signed in using <strong>Facebook</strong>. After resetting your password, you can log in using your email and password. You can also manage password options in your profile settings.</p>`;
     }
   }
 
@@ -174,7 +174,7 @@ exports.sendOtpEmail = async (to, otp, purpose = "signup", sign_type_id = 1) => 
     </div>`;
 
   const info = await transporter.sendMail({
-    from: `"no_reply-QhashAi" <${process.env.MAILTRAP_USER}>`,
+    from: `"no_reply - QhashAi" <${process.env.MAILTRAP_USER}>`,
     to,
     subject,
     text: `Your OTP code is ${otp}. It will expire in 5 minutes.`,

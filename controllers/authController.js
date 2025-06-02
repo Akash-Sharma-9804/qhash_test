@@ -207,6 +207,18 @@ exports.login = async (req, res) => {
     }
 
     console.log("✅ User found:", user);
+    // Check if the user signed up via Google or Facebook
+    if (user.sign_type_id === 2) {
+      return res.status(400).json({
+        error: "You signed up using Google. Please use Google login or reset your password to log in with email.",
+      });
+    }
+
+    if (user.sign_type_id === 3) {
+      return res.status(400).json({
+        error: "You signed up using Facebook. Please use Facebook login or reset your password to log in with email.",
+      });
+    }
 
     if (!user.password) {
       console.error("❌ ERROR: user.password is undefined!");
@@ -231,6 +243,11 @@ exports.login = async (req, res) => {
     }
 
     console.log("🔹 User logged in:", user.id);
+
+    // const ip_block_query = await connection.query(
+    //   "SELECT * FROM blocked_ip ",
+    //   [req.ip]
+    // );
 
     // await ensureUserInHistory(connection, user.id, user.username, user.email);
 
