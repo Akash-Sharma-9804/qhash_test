@@ -3,18 +3,38 @@ const openai = require("../config/openai");
 const deepseek = require("../config/deepseek");
 const { query } = require("../config/db"); // make sure you're importing correctly
 
+// ✅ STANDARDIZED DATABASE QUERY WRAPPER
+const executeQuery = async (sql, params = []) => {
+  try {
+    const result = await db.query(sql, params);
+    // console.log("✅ Database query successful:", result);
+    // Handle different return formats consistently
+    if (Array.isArray(result) && Array.isArray(result[0])) {
+      return result[0]; // Return the actual rows
+    }
+    return result;
+  } catch (error) {
+    console.error("❌ Database query error:", error);
+    throw error;
+  }
+};
+
 exports.createConversation = async (req, res) => {
   const user_id = req.user?.user_id;
-  if (!user_id) {
-    return res.status(400).json({ error: "User ID is required" });
+  
+  // ✅ STRICT USER VALIDATION
+  if (!user_id || isNaN(user_id)) {
+    console.error("❌ Invalid user_id:", user_id);
+    return res.status(400).json({ error: "Valid User ID is required" });
   }
+
+  console.log("🔍 Creating conversation for user_id:", user_id);
 
   try {
     const defaultName = "New Conversation";
-    console.log("📥 Incoming request body:", req.body);
 
-    // Step 1: Find the most recent conversation for this user
-    const recentConversationResult = await db.query(
+    // ✅ CONSISTENT DATABASE QUERY
+    const recentConversations = await executeQuery(
       `SELECT id, name FROM conversations 
        WHERE user_id = ? 
        ORDER BY created_at DESC 
@@ -22,33 +42,22 @@ exports.createConversation = async (req, res) => {
       [user_id]
     );
 
-    let recentConversation;
-    if (Array.isArray(recentConversationResult)) {
-      recentConversation = recentConversationResult[0];
-    } else if (
-      recentConversationResult &&
-      Array.isArray(recentConversationResult[0])
-    ) {
-      recentConversation = recentConversationResult[0][0];
-    }
+    console.log("🔍 Recent conversations for user", user_id, ":", recentConversations);
 
-    if (recentConversation) {
-      // Step 2: Check if this conversation has any messages
-      const messageCountResult = await db.query(
+    if (recentConversations && recentConversations.length > 0) {
+      const recentConversation = recentConversations[0];
+      
+      // Check if this conversation has any messages
+      const messageCountResult = await executeQuery(
         `SELECT COUNT(*) as count FROM chat_history WHERE conversation_id = ?`,
         [recentConversation.id]
       );
 
-      let messageCount;
-      if (Array.isArray(messageCountResult)) {
-        messageCount = messageCountResult[0]?.count || 0;
-      } else if (messageCountResult && Array.isArray(messageCountResult[0])) {
-        messageCount = messageCountResult[0][0]?.count || 0;
-      }
+      const messageCount = messageCountResult[0]?.count || 0;
 
       // If no messages, reuse this conversation
       if (messageCount === 0) {
-        console.log("🔄 Reused empty conversation:", recentConversation.id);
+        console.log("🔄 Reused empty conversation:", recentConversation.id, "for user:", user_id);
         return res.status(200).json({
           success: true,
           conversation_id: recentConversation.id,
@@ -58,23 +67,20 @@ exports.createConversation = async (req, res) => {
       }
     }
 
-    // Step 3: Create new conversation if none exists or recent one has messages
+    // Create new conversation
     const name = req.body.name || defaultName;
-    const newConversationResult = await db.query(
+    const newConversationResult = await executeQuery(
       "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
       [user_id, name]
     );
 
-    let conversation_id;
-    if (Array.isArray(newConversationResult)) {
-      conversation_id = newConversationResult[0].insertId;
-    } else if (newConversationResult && newConversationResult.insertId) {
-      conversation_id = newConversationResult.insertId;
-    } else {
+    const conversation_id = newConversationResult.insertId;
+    
+    if (!conversation_id) {
       throw new Error("Failed to get insert ID");
     }
 
-    console.log("✅ Created new conversation:", conversation_id);
+    console.log("✅ Created new conversation:", conversation_id, "for user:", user_id);
 
     return res.status(201).json({
       success: true,
@@ -83,8 +89,7 @@ exports.createConversation = async (req, res) => {
       action: "created",
     });
   } catch (error) {
-    console.error("❌ Error creating conversation:", error);
-    console.error("❌ Error stack:", error.stack);
+    console.error("❌ Error creating conversation for user", user_id, ":", error);
     return res.status(500).json({
       error: "Failed to create or reuse conversation",
       details: error.message,
@@ -92,57 +97,88 @@ exports.createConversation = async (req, res) => {
   }
 };
 
-// ✅ Get all conversations for a user
-
+// ✅ FIXED GET CONVERSATIONS WITH PROPER USER VALIDATION
 exports.getConversations = async (req, res) => {
-  const user_id = req.user.user_id;
-  console.log("🔹 User ID in getConversations:", user_id);
+  const user_id = req.user?.user_id;
+  
+  // ✅ STRICT USER VALIDATION
+  if (!user_id || isNaN(user_id)) {
+    console.error("❌ Invalid user_id in getConversations:", user_id);
+    return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
+  }
+
+  console.log("🔍 Fetching conversations for user_id:", user_id);
 
   try {
-    const rows = await db.query(
+    // ✅ CONSISTENT DATABASE QUERY WITH USER VALIDATION
+    const conversations = await executeQuery(
       "SELECT * FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY created_at DESC",
       [user_id]
     );
 
-    // console.log("🔍 Raw SQL result:", rows);
+    console.log("✅ Found", conversations.length, "conversations for user:", user_id);
+    
+    // ✅ LOG FIRST FEW CONVERSATION IDs FOR DEBUGGING
+    if (conversations.length > 0) {
+      // console.log("🔍 Conversation IDs:", conversations.slice(0, 3).map(c => c.id));
+    }
 
-    // ✅ Ensure it's an array
-    const conversations = Array.isArray(rows[0]) ? rows[0] : rows;
-
-    // console.log("✅ Conversations (final processed):", conversations);
-    res.json({ success: true, conversations });
+    res.json({ 
+      success: true, 
+      conversations: conversations || [],
+      user_id: user_id // Include for debugging
+    });
   } catch (error) {
-    console.error("❌ Error fetching conversations:", error.message);
+    console.error("❌ Error fetching conversations for user", user_id, ":", error.message);
     res.status(500).json({ error: "Failed to retrieve conversations" });
   }
 };
 
-// ✅ Get chat history for a specific conversation
-
-// working
-
+// ✅ FIXED GET CONVERSATION HISTORY WITH OWNERSHIP VALIDATION
 exports.getConversationHistory = async (req, res) => {
   const { conversation_id } = req.params;
+  const user_id = req.user?.user_id;
 
+  // ✅ VALIDATE INPUTS
   if (!conversation_id || isNaN(conversation_id)) {
     return res.status(400).json({ error: "Valid conversation ID is required" });
   }
 
+  if (!user_id || isNaN(user_id)) {
+    console.error("❌ Invalid user_id in getConversationHistory:", user_id);
+    return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
+  }
+
+  console.log("🔍 Fetching history for conversation:", conversation_id, "user:", user_id);
+
   try {
-    const sql = `
-      SELECT id, user_message AS message, response, created_at, file_names, file_path, suggestions
-      FROM chat_history
-      WHERE conversation_id = ?
-      ORDER BY created_at ASC
-    `;
+    // ✅ VERIFY CONVERSATION OWNERSHIP FIRST
+    const ownershipCheck = await executeQuery(
+      "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
+      [parseInt(conversation_id), user_id]
+    );
 
-    const rows = await query(sql, [parseInt(conversation_id)]);
-
-    if (!rows.length) {
-      return res.status(200).json({ success: false, history: [] });
+    if (!ownershipCheck || ownershipCheck.length === 0) {
+      console.error("❌ Unauthorized access attempt - conversation:", conversation_id, "user:", user_id);
+      return res.status(403).json({ 
+        error: "Unauthorized: Conversation does not belong to user" 
+      });
     }
 
-    const formattedHistory = rows.map((msg) => {
+    // ✅ FETCH HISTORY ONLY AFTER OWNERSHIP VERIFICATION
+    const history = await executeQuery(
+      `SELECT id, user_message AS message, response, created_at, file_names, file_path, suggestions
+       FROM chat_history
+       WHERE conversation_id = ?
+       ORDER BY created_at ASC`,
+      [parseInt(conversation_id)]
+    );
+
+    if (!history || history.length === 0) {
+      return res.status(200).json({ success: true, history: [] });
+    }
+
+    const formattedHistory = history.map((msg) => {
       const filePaths = msg.file_path ? msg.file_path.split(",") : [];
       const fileNames = msg.file_names ? msg.file_names.split(",") : [];
 
@@ -163,53 +199,93 @@ exports.getConversationHistory = async (req, res) => {
       };
     });
 
-    return res.status(200).json({ success: true, history: formattedHistory });
+    console.log("✅ Retrieved", formattedHistory.length, "messages for conversation:", conversation_id);
+
+    return res.status(200).json({ 
+      success: true, 
+      history: formattedHistory,
+      conversation_id: parseInt(conversation_id),
+      user_id: user_id // Include for debugging
+    });
   } catch (error) {
     console.error("❌ Error fetching conversation history:", error.message);
-    return res
-      .status(500)
-      .json({ error: "Failed to retrieve conversation history" });
+    return res.status(500).json({ error: "Failed to retrieve conversation history" });
   }
 };
 
-// ✅ update conversation name
+// ✅ UPDATE CONVERSATION NAME WITH OWNERSHIP VALIDATION
 exports.updateConversationName = async (req, res) => {
   const { conversationId } = req.params;
   const { name } = req.body;
+  const user_id = req.user?.user_id;
 
   if (!name) {
     return res.status(400).json({ error: "New name is required" });
   }
 
+  // ✅ USER VALIDATION
+  if (!user_id || isNaN(user_id)) {
+    console.error("❌ Invalid user_id in updateConversationName:", user_id);
+    return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
+  }
+
+  console.log("🔍 Updating conversation name:", conversationId, "for user:", user_id);
+
   try {
-    await db.query("UPDATE conversations SET name = ? WHERE id = ?", [
-      name,
-      conversationId,
-    ]);
+    // ✅ VERIFY OWNERSHIP BEFORE UPDATE
+    const ownershipCheck = await executeQuery(
+      "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
+      [conversationId, user_id]
+    );
+
+    if (!ownershipCheck || ownershipCheck.length === 0) {
+      console.error("❌ Unauthorized update attempt - conversation:", conversationId, "user:", user_id);
+      return res.status(403).json({ 
+        error: "Unauthorized: Conversation does not belong to user" 
+      });
+    }
+
+    await executeQuery(
+      "UPDATE conversations SET name = ? WHERE id = ? AND user_id = ?", 
+      [name, conversationId, user_id]
+    );
+
+    console.log("✅ Updated conversation name:", conversationId, "to:", name);
     return res.status(200).json({ success: true, name });
   } catch (error) {
-    console.error("Error renaming conversation:", error.message);
+    console.error("❌ Error renaming conversation:", error.message);
     return res.status(500).json({ error: "Failed to rename conversation" });
   }
 };
 
-// ✅ Get general chat history for a user
+// ✅ GET CHAT HISTORY WITH USER VALIDATION
 exports.getChatHistory = async (req, res) => {
-  const user_id = req.user.user_id;
+  const user_id = req.user?.user_id;
+
+  // ✅ USER VALIDATION
+  if (!user_id || isNaN(user_id)) {
+    console.error("❌ Invalid user_id in getChatHistory:", user_id);
+    return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
+  }
+
+  console.log("🔍 Fetching chat history for user_id:", user_id);
 
   try {
-    const [history] = await db.query(
+    const history = await executeQuery(
       "SELECT id, user_message AS message, response, created_at FROM chat_history WHERE user_id = ? ORDER BY created_at DESC",
       [user_id]
     );
+
+    console.log("✅ Found", history.length, "chat messages for user:", user_id);
 
     res.json({
       success: true,
       history: history.length > 0 ? history : [],
       message: history.length === 0 ? "No chat history found" : undefined,
+      user_id: user_id // Include for debugging
     });
   } catch (error) {
-    console.error("❌ Error fetching chat history:", error.message);
+    console.error("❌ Error fetching chat history for user", user_id, ":", error.message);
     res.status(500).json({ error: "Failed to retrieve chat history" });
   }
 };
@@ -403,6 +479,7 @@ exports.getChatHistory = async (req, res) => {
 // };
 
 // test
+// ✅ ASK CHATBOT WITH USER VALIDATION
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
@@ -410,8 +487,10 @@ exports.askChatbot = async (req, res) => {
   const user_id = req.user?.user_id;
   const uploadedFiles = req.body.uploaded_file_metadata || [];
 
-  if (!user_id) {
-    return res.status(401).json({ error: "Unauthorized: User ID not found." });
+  // ✅ STRICT USER VALIDATION
+  if (!user_id || isNaN(user_id)) {
+    console.error("❌ Invalid user_id in askChatbot:", user_id);
+    return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
   }
 
   if (!userMessage && !extracted_summary) {
@@ -419,6 +498,8 @@ exports.askChatbot = async (req, res) => {
       error: "User message or extracted summary is required",
     });
   }
+
+  console.log("🔍 Processing chat for user_id:", user_id, "conversation:", conversation_id);
 
   try {
     // Set headers for streaming
@@ -431,17 +512,36 @@ exports.askChatbot = async (req, res) => {
       "Access-Control-Allow-Headers": "Cache-Control",
     });
 
+    // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED
+    if (conversation_id && !isNaN(conversation_id)) {
+      const ownershipCheck = await executeQuery(
+        "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
+        [conversation_id, user_id]
+      );
+
+      if (!ownershipCheck || ownershipCheck.length === 0) {
+        console.error("❌ Unauthorized conversation access - conversation:", conversation_id, "user:", user_id);
+        res.write(JSON.stringify({
+          type: "error",
+          error: "Unauthorized: Conversation does not belong to user"
+        }) + "\n");
+        res.end();
+        return;
+      }
+    }
+
     // 🚀 FAST RENAME CHECK (no DB write yet, just determine if rename is needed)
     let shouldRename = false;
     let newConversationName = null;
 
     if (conversation_id && userMessage) {
       // Quick check if rename is needed (minimal DB query)
-      const [rows] = await db.query(
-        "SELECT name FROM conversations WHERE id = ?",
-        [conversation_id]
+      const conversationData = await executeQuery(
+        "SELECT name FROM conversations WHERE id = ? AND user_id = ?",
+        [conversation_id, user_id]
       );
-      const currentName = rows?.name;
+      
+      const currentName = conversationData[0]?.name;
 
       if (
         currentName === "New Conversation" ||
@@ -461,16 +561,12 @@ exports.askChatbot = async (req, res) => {
 
     if (conversation_id) {
       try {
-        const summaryResult = await db.query(
+        const summaryResult = await executeQuery(
           "SELECT summarized_chat FROM chat_history WHERE conversation_id = ? AND summarized_chat IS NOT NULL ORDER BY created_at DESC LIMIT 1",
           [conversation_id]
         );
 
-        if (
-          summaryResult &&
-          summaryResult.length > 0 &&
-          summaryResult[0]?.summarized_chat
-        ) {
+        if (summaryResult && summaryResult.length > 0 && summaryResult[0]?.summarized_chat) {
           summaryContext = summaryResult[0].summarized_chat;
         }
       } catch (contextError) {
@@ -603,7 +699,7 @@ Be helpful, accurate, professional, and use all available context to provide the
           suggestions,
           user_id,
           shouldRename,
-        newConversationName
+          newConversationName
         );
       });
     } catch (aiError) {
@@ -663,26 +759,28 @@ async function generateFastSuggestions(userMessage) {
   }
 }
 
-// 🚀 OPTIMIZED BACKGROUND TASKS
+// 🚀 OPTIMIZED BACKGROUND TASKS WITH USER VALIDATION
 async function handleAllBackgroundTasksOptimized(conversation_id, userMessage, aiResponse, uploadedFiles, extracted_summary, suggestions, user_id, shouldRename, newConversationName) {
   try {
-    console.log("🔄 Starting optimized background tasks for conversation:", conversation_id);
+    console.log("🔄 Starting optimized background tasks for conversation:", conversation_id, "user:", user_id);
+
+    // ✅ USER VALIDATION IN BACKGROUND TASKS
+    if (!user_id || isNaN(user_id)) {
+      console.error("❌ Invalid user_id in background tasks:", user_id);
+      return;
+    }
 
     // 🚀 STEP 1: Create conversation if needed
     if (!conversation_id || isNaN(conversation_id)) {
       try {
-        const conversationResult = await db.query(
+        const conversationResult = await executeQuery(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
           [user_id, newConversationName || userMessage?.substring(0, 20) || "New Chat"]
         );
         
-        if (Array.isArray(conversationResult)) {
-          conversation_id = conversationResult[0].insertId;
-        } else if (conversationResult && conversationResult.insertId) {
-          conversation_id = conversationResult.insertId;
-        }
+        conversation_id = conversationResult.insertId;
         
-        console.log("✅ Created new conversation:", conversation_id);
+        console.log("✅ Created new conversation:", conversation_id, "for user:", user_id);
       } catch (convError) {
         console.error("❌ Conversation creation failed:", convError);
         return;
@@ -695,7 +793,7 @@ async function handleAllBackgroundTasksOptimized(conversation_id, userMessage, a
       saveToDatabase(conversation_id, userMessage, aiResponse, uploadedFiles, extracted_summary, suggestions),
       
       // Rename conversation ONLY if needed (skip DB query since we already checked)
-      shouldRename ? executeRename(conversation_id, newConversationName) : Promise.resolve(false),
+      shouldRename ? executeRename(conversation_id, newConversationName, user_id) : Promise.resolve(false),
       
       // Generate comprehensive summary
       generateAndSaveComprehensiveSummary(conversation_id, userMessage, aiResponse)
@@ -707,7 +805,8 @@ async function handleAllBackgroundTasksOptimized(conversation_id, userMessage, a
       database: dbResult.status === 'fulfilled' ? "✅ Saved" : "❌ Failed",
       rename: shouldRename ? (renameResult.status === 'fulfilled' ? "✅ Done" : "❌ Failed") : "⏭️ Skipped", 
       summary: summaryResult.status === 'fulfilled' ? "✅ Generated" : "❌ Failed",
-      conversation_id: conversation_id
+      conversation_id: conversation_id,
+      user_id: user_id
     });
 
   } catch (error) {
@@ -734,7 +833,7 @@ async function saveToDatabase(
       .filter(Boolean)
       .join(",");
 
-    await db.query(
+    await executeQuery(
       "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, suggestions) VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)",
       [
         conversation_id,
@@ -747,7 +846,7 @@ async function saveToDatabase(
       ]
     );
 
-    console.log("✅ Database save successful");
+    console.log("✅ Database save successful for conversation:", conversation_id);
     return true;
   } catch (error) {
     console.error("❌ Database save error:", error);
@@ -755,11 +854,14 @@ async function saveToDatabase(
   }
 }
 
-// 🏷️ EXECUTE RENAME (simple DB update only)
-async function executeRename(conversation_id, newName) {
+// 🏷️ EXECUTE RENAME WITH USER VALIDATION
+async function executeRename(conversation_id, newName, user_id) {
   try {
-    await db.query("UPDATE conversations SET name = ? WHERE id = ?", [newName, conversation_id]);
-    console.log(`🏷️ Conversation renamed to: "${newName}"`);
+    await executeQuery(
+      "UPDATE conversations SET name = ? WHERE id = ? AND user_id = ?", 
+      [newName, conversation_id, user_id]
+    );
+    console.log(`🏷️ Conversation renamed to: "${newName}" for user:`, user_id);
     return true;
   } catch (error) {
     console.error("❌ Rename execution error:", error);
@@ -767,6 +869,7 @@ async function executeRename(conversation_id, newName) {
   }
 }
 
+// 🧠 GENERATE COMPREHENSIVE SUMMARY (BACKGROUND) - UPDATED
 // 🧠 GENERATE COMPREHENSIVE SUMMARY (BACKGROUND) - UPDATED
 async function generateAndSaveComprehensiveSummary(
   conversation_id,
@@ -777,7 +880,7 @@ async function generateAndSaveComprehensiveSummary(
     console.log("🧠 Generating comprehensive summary...");
 
     // Check message count (create summary after 4 messages = 2 exchanges)
-    const messageCountResult = await db.query(
+    const messageCountResult = await executeQuery(
       "SELECT COUNT(*) as count FROM chat_history WHERE conversation_id = ?",
       [conversation_id]
     );
@@ -794,14 +897,10 @@ async function generateAndSaveComprehensiveSummary(
     }
 
     // Get ENTIRE conversation history
-    const fullHistoryResult = await db.query(
+    const fullHistory = await executeQuery(
       "SELECT user_message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
       [conversation_id]
     );
-
-    const fullHistory = Array.isArray(fullHistoryResult)
-      ? fullHistoryResult
-      : [];
 
     // Build complete conversation
     const completeConversation = [];
@@ -871,7 +970,7 @@ Keep it detailed but concise (200-300 words).`,
 
     if (summary && summary.length > 10) {
       // Update the latest chat_history record with comprehensive summary
-      await db.query(
+      await executeQuery(
         "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
         [summary, conversation_id]
       );
@@ -1019,53 +1118,59 @@ async function generateFastGuestSuggestions(userMessage, aiProvider, model) {
   }
 }
 
-
-
 //  delete function
-
 exports.softDeleteConversation = async (req, res) => {
   const { id } = req.params;
-  const userId = req.user.user_id;
+  const userId = req.user?.user_id;
+
+  // ✅ USER VALIDATION
+  if (!userId || isNaN(userId)) {
+    console.error("❌ Invalid user_id in softDeleteConversation:", userId);
+    return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
+  }
+
+  console.log("🔍 Soft deleting conversation:", id, "for user:", userId);
 
   try {
     // Step 1: Check if the conversation exists and belongs to the user
-    const [conversationCheck] = await db.query(
+    const conversationCheck = await executeQuery(
       "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
       [id, userId]
     );
 
     if (!conversationCheck || conversationCheck.length === 0) {
+      console.error("❌ Unauthorized delete attempt - conversation:", id, "user:", userId);
       return res
         .status(404)
         .json({ error: "Conversation not found or unauthorized" });
     }
 
     // Step 2: Count remaining conversations after potential deletion
-    const [remainingConversationsResult] = await db.query(
+    const remainingConversationsResult = await executeQuery(
       "SELECT COUNT(*) as count FROM conversations WHERE user_id = ? AND is_deleted = FALSE AND id != ?",
       [userId, id]
     );
 
-    const remainingConversations = remainingConversationsResult?.count || 0;
+    const remainingConversations = remainingConversationsResult[0]?.count || 0;
 
     // Step 3: Check if there's chat history in the conversation being deleted
-    const [chatHistoryResult] = await db.query(
+    const chatHistoryResult = await executeQuery(
       "SELECT COUNT(*) as count FROM chat_history WHERE conversation_id = ?",
       [id]
     );
 
-    const hasChatHistory = (chatHistoryResult?.count || 0) > 0;
+    const hasChatHistory = (chatHistoryResult[0]?.count || 0) > 0;
 
     // Step 4: Apply the logic based on your requirements
     if (remainingConversations > 0) {
       // There are other conversations left, safe to delete this one
-      await db.query(
+      await executeQuery(
         "UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?",
         [id, userId]
       );
 
       console.log(
-        `✅ Conversation ${id} soft deleted. ${remainingConversations} conversations remaining.`
+        `✅ Conversation ${id} soft deleted. ${remainingConversations} conversations remaining for user ${userId}.`
       );
 
       return res.json({
@@ -1079,18 +1184,18 @@ exports.softDeleteConversation = async (req, res) => {
         // Has chat history: delete it and create/select a new conversation using createConversation logic
 
         // First, delete the current conversation
-        await db.query(
+        await executeQuery(
           "UPDATE conversations SET is_deleted = TRUE WHERE id = ? AND user_id = ?",
           [id, userId]
         );
 
-        console.log(`🗑️ Deleted last conversation ${id} with chat history`);
+        console.log(`🗑️ Deleted last conversation ${id} with chat history for user ${userId}`);
 
         // Now use the same logic as createConversation to find/create and select a conversation
         const defaultName = "New Conversation";
 
         // Step 1: Find the most recent conversation for this user (excluding the deleted one)
-        const recentConversationResult = await db.query(
+        const recentConversations = await executeQuery(
           `SELECT id, name FROM conversations 
            WHERE user_id = ? AND is_deleted = FALSE
            ORDER BY created_at DESC 
@@ -1098,36 +1203,20 @@ exports.softDeleteConversation = async (req, res) => {
           [userId]
         );
 
-        let recentConversation;
-        if (Array.isArray(recentConversationResult)) {
-          recentConversation = recentConversationResult[0];
-        } else if (
-          recentConversationResult &&
-          Array.isArray(recentConversationResult[0])
-        ) {
-          recentConversation = recentConversationResult[0][0];
-        }
-
-        if (recentConversation) {
+        if (recentConversations && recentConversations.length > 0) {
+          const recentConversation = recentConversations[0];
+          
           // Step 2: Check if this conversation has any messages
-          const messageCountResult = await db.query(
+          const messageCountResult = await executeQuery(
             `SELECT COUNT(*) as count FROM chat_history WHERE conversation_id = ?`,
             [recentConversation.id]
           );
 
-          let messageCount;
-          if (Array.isArray(messageCountResult)) {
-            messageCount = messageCountResult[0]?.count || 0;
-          } else if (
-            messageCountResult &&
-            Array.isArray(messageCountResult[0])
-          ) {
-            messageCount = messageCountResult[0][0]?.count || 0;
-          }
+          const messageCount = messageCountResult[0]?.count || 0;
 
           // If no messages, reuse this conversation
           if (messageCount === 0) {
-            console.log("🔄 Reused empty conversation:", recentConversation.id);
+            console.log("🔄 Reused empty conversation:", recentConversation.id, "for user:", userId);
             return res.status(200).json({
               success: true,
               conversation_id: recentConversation.id,
@@ -1141,23 +1230,22 @@ exports.softDeleteConversation = async (req, res) => {
         }
 
         // Step 3: Create new conversation if none exists or recent one has messages
-        const newConversationResult = await db.query(
+        const newConversationResult = await executeQuery(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
           [userId, defaultName]
         );
 
-        let conversation_id;
-        if (Array.isArray(newConversationResult)) {
-          conversation_id = newConversationResult[0].insertId;
-        } else if (newConversationResult && newConversationResult.insertId) {
-          conversation_id = newConversationResult.insertId;
-        } else {
+        const conversation_id = newConversationResult.insertId;
+        
+        if (!conversation_id) {
           throw new Error("Failed to get insert ID");
         }
 
         console.log(
           "✅ Created and selected new conversation:",
-          conversation_id
+          conversation_id,
+          "for user:",
+          userId
         );
 
         return res.status(201).json({
@@ -1172,7 +1260,7 @@ exports.softDeleteConversation = async (req, res) => {
       } else {
         // No chat history: keep the conversation (it's a feature!)
         console.log(
-          `💡 Keeping conversation ${id} - it's your workspace and ready for new chats!`
+          `💡 Keeping conversation ${id} - it's your workspace and ready for new chats for user ${userId}!`
         );
 
         return res.status(200).json({
@@ -1186,7 +1274,7 @@ exports.softDeleteConversation = async (req, res) => {
       }
     }
   } catch (error) {
-    console.error("❌ Error in soft delete conversation:", error);
+    console.error("❌ Error in soft delete conversation for user", userId, ":", error);
     res.status(500).json({ error: "Internal server error" });
   }
 };

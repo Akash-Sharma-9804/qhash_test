@@ -46,21 +46,19 @@ const jwt = require("jsonwebtoken");
 const verifyToken = (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
-        let token = null;
 
-        console.log("🔍 Received Auth Header:", authHeader);
+        console.log("🔍 Auth check for:", req.method, req.path);
+        console.log("🔍 Received Auth Header:", authHeader ? "Bearer token present" : "No auth header");
 
-        if (authHeader && authHeader.startsWith("Bearer ")) {
-            token = authHeader.split(" ")[1];
-            console.log("🔍 Extracted Token from header:", token);
-        } else if (req.cookies && req.cookies.token) {
-            token = req.cookies.token;
-            console.log("🔍 Extracted Token from cookie:", token);
-        } else {
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            console.error("❌ No valid authorization header");
             return res.status(401).json({ error: "Unauthorized: No token provided" });
         }
 
+        const token = authHeader.split(" ")[1];
+        
         if (!token) {
+            console.error("❌ Token missing from header");
             return res.status(401).json({ error: "Unauthorized: Token missing" });
         }
 
@@ -71,9 +69,14 @@ const verifyToken = (req, res, next) => {
                 return res.status(401).json({ error: "Unauthorized: Invalid token" });
             }
 
-            console.log("✅ Verified User:", decoded);
-            req.user = decoded; // Store decoded user info in `req.user`
-            console.log("🧩 Decoded JWT user:", decoded);
+            // ✅ STRICT USER VALIDATION
+            if (!decoded.user_id || isNaN(decoded.user_id)) {
+                console.error("❌ Invalid user_id in token:", decoded);
+                return res.status(401).json({ error: "Unauthorized: Invalid user data" });
+            }
+
+            console.log("✅ Verified User ID:", decoded.user_id);
+            req.user = decoded;
             next();
         });
     } catch (error) {
@@ -83,3 +86,4 @@ const verifyToken = (req, res, next) => {
 };
 
 module.exports = verifyToken;
+
