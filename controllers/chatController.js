@@ -2,7 +2,7 @@ const db = require("../config/db");
 const openai = require("../config/openai");
 const deepseek = require("../config/deepseek");
 const { query } = require("../config/db"); // make sure you're importing correctly
-
+const { extractUrls, processUrls } = require('../utils/urlProcessor');
 // ✅ STANDARDIZED DATABASE QUERY WRAPPER
 const executeQuery = async (sql, params = []) => {
   try {
@@ -290,196 +290,7 @@ exports.getChatHistory = async (req, res) => {
   }
 };
 
-// test working 22-05-25
-// exports.askChatbot = async (req, res) => {
-//   console.log("✅ Received request at /chat:", req.body);
-
-//   let { userMessage, conversation_id, extracted_summary } = req.body;
-//   const user_id = req.user?.user_id;
-//   const uploadedFiles = req.body.uploaded_file_metadata || [];
-
-//   if (!user_id) {
-//     return res.status(401).json({ error: "Unauthorized: User ID not found." });
-//   }
-
-//   if (!userMessage && !extracted_summary) {
-//     return res
-//       .status(400)
-//       .json({ error: "User message or extracted summary is required" });
-//   }
-
-//   try {
-//     if (!conversation_id || isNaN(conversation_id)) {
-//       const [conversationResult] = await db.query(
-//         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-//         [user_id, userMessage?.substring(0, 20) || "New Chat"]
-//       );
-//       conversation_id = conversationResult.insertId;
-//     }
-
-//     const [existingConversation] = await db.query(
-//       "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
-//       [conversation_id, user_id]
-//     );
-
-//     if (!existingConversation || existingConversation.length === 0) {
-//       return res.status(403).json({
-//         error: "Unauthorized: Conversation does not belong to the user.",
-//       });
-//     }
-
-//     const historyResultsRaw = await db.query(
-//       "SELECT user_message AS message, response, extracted_text, file_path FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
-//       [conversation_id]
-//     );
-
-//     const historyResults = Array.isArray(historyResultsRaw)
-//       ? historyResultsRaw
-//       : [];
-
-//     const chatHistory = [];
-//     const allExtractedTexts = [];
-
-//     historyResults.forEach((chat) => {
-//       if (chat.message)
-//         chatHistory.push({ role: "user", content: chat.message });
-//       if (chat.response)
-//         chatHistory.push({ role: "assistant", content: chat.response });
-//       if (chat.extracted_text) allExtractedTexts.push(chat.extracted_text);
-//     });
-
-//     if (extracted_summary && extracted_summary !== "No readable content") {
-//       allExtractedTexts.push(extracted_summary);
-//     }
-
-//     const currentDate = new Date().toLocaleDateString("en-US", {
-//       year: "numeric",
-//       month: "long",
-//       day: "numeric",
-//     });
-
-//     const systemPrompt = {
-//       role: "system",
-//       content:
-//         `You are an intelligent assistant. Today's date is ${currentDate}. ` +
-//         "You are Quantumhash, an AI assistant developed by the Quantumhash development team in 2024. " +
-//         "If someone asks for your name, *only say*: 'My name is Quantumhash AI.' " +
-//         "If someone asks who developed you, *only say*: 'I was developed by the Quantumhash development team.' " +
-//         `If someone asks about your knowledge cutoff, *only say*: 'I’ve got information up to the present, ${currentDate}.' ` +
-//         "You have access to documents uploaded by the user. Use relevant content from them to answer user questions in detail.",
-//     };
-
-//     const finalMessages = [systemPrompt];
-
-//     finalMessages.push(...chatHistory.slice(-10));
-
-//     if (allExtractedTexts.length > 0) {
-//       const structuredDocs = allExtractedTexts
-//         .map((text, i) => `--- Document ${i + 1} ---\n${text}`)
-//         .join("\n\n");
-
-//       finalMessages.push({
-//         role: "system",
-//         content: `DOCUMENT CONTEXT:\n${structuredDocs.substring(0, 25000)}${
-//           structuredDocs.length > 25000 ? "\n... (truncated)" : ""
-//         }`,
-//       });
-//     }
-
-//     let fullUserMessage = userMessage || "";
-//     if (Array.isArray(uploadedFiles)) {
-//       const fileNames = uploadedFiles.map((f) => f?.file_name).filter(Boolean);
-//       if (fileNames.length > 0) {
-//         fullUserMessage += `\n[Uploaded files: ${fileNames.join(", ")}]`;
-//       }
-//     }
-
-//     finalMessages.push({ role: "user", content: fullUserMessage });
-
-//     let aiResponse = "";
-//     try {
-//       const aiOptions = {
-//         model: process.env.USE_OPENAI === "true" ? "gpt-4" : "deepseek-chat",
-//         messages: finalMessages,
-//         temperature: 0.7,
-//         max_tokens: 7000,
-//       };
-
-//       const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
-//       const aiResult = await aiProvider.chat.completions.create(aiOptions);
-//       aiResponse =
-//         aiResult.choices?.[0]?.message?.content ||
-//         "I couldn't generate a response. Please try again.";
-//     } catch (aiError) {
-//       console.error("AI API error:", aiError);
-//       aiResponse =
-//         "I'm having trouble processing your request. Please try again.";
-//     }
-
-//     try {
-//       const filePaths = uploadedFiles
-//         .map((f) => f?.file_path)
-//         .filter(Boolean)
-//         .join(",");
-//       const fileNames = uploadedFiles
-//         .map((f) => f?.file_name)
-//         .filter(Boolean)
-//         .join(",");
-
-//       await db.query(
-//         "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names) VALUES (?, ?, ?, NOW(), ?, ?, ?)",
-//         [
-//           conversation_id,
-//           userMessage,
-//           aiResponse,
-//           filePaths || null,
-//           extracted_summary || null,
-//           fileNames || null,
-//         ]
-//       );
-
-//       if (userMessage) {
-//         const [rows] = await db.query(
-//           "SELECT name FROM conversations WHERE id = ?",
-//           [conversation_id]
-//         );
-//         const currentName = rows?.name;
-//         if (currentName === "New Conversation") {
-//           const newName =
-//             userMessage.length > 20
-//               ? userMessage.substring(0, 17) + "..."
-//               : userMessage;
-//           await db.query("UPDATE conversations SET name = ? WHERE id = ?", [
-//             newName,
-//             conversation_id,
-//           ]);
-//         }
-//       }
-//     } catch (dbError) {
-//       console.error("❌ Database save error:", dbError);
-//     }
-
-//     res.json({
-//       success: true,
-//       conversation_id,
-//       response: aiResponse,
-//       uploaded_files: uploadedFiles.map((file) => ({
-//         file_name: file.file_name,
-//         file_path: file.file_path,
-//         file_type: file.file_name?.split(".").pop()?.toLowerCase() || null,
-//       })),
-//       context: {
-//         document_available: allExtractedTexts.length > 0,
-//       },
-//     });
-//   } catch (error) {
-//     console.error("❌ Chat controller error:", error.stack || error.message);
-//     res.status(500).json({ error: "Internal server error" });
-//   }
-// };
-
-// test
-// ✅ ASK CHATBOT WITH USER VALIDATION
+ 
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
@@ -530,57 +341,127 @@ exports.askChatbot = async (req, res) => {
       }
     }
 
-    // 🚀 FAST RENAME CHECK (no DB write yet, just determine if rename is needed)
-    let shouldRename = false;
-    let newConversationName = null;
+    // 🚀 PARALLEL PROCESSING FOR SPEED - Start all async operations simultaneously
+    const parallelTasks = [];
 
-    if (conversation_id && userMessage) {
-      // Quick check if rename is needed (minimal DB query)
-      const conversationData = await executeQuery(
-        "SELECT name FROM conversations WHERE id = ? AND user_id = ?",
-        [conversation_id, user_id]
-      );
-      
-      const currentName = conversationData[0]?.name;
+    // Task 1: URL Processing (if URLs exist)
+    let urlProcessingPromise = Promise.resolve({ urlData: [], urlContent: "", processedUrls: [] });
+    if (userMessage) {
+      const extractedUrls = extractUrls(userMessage);
+      if (extractedUrls.length > 0) {
+        console.log(`🔗 Found ${extractedUrls.length} URLs - processing in parallel`);
+        
+        // Send URL processing status immediately
+        res.write(JSON.stringify({
+          type: "url_processing",
+          status: "started",
+          urls: extractedUrls,
+          count: extractedUrls.length
+        }) + "\n");
 
-      if (
-        currentName === "New Conversation" ||
-        currentName === "New Chat" ||
-        !currentName
-      ) {
-        shouldRename = true;
-        newConversationName =
-          userMessage.length > 20
-            ? userMessage.substring(0, 17) + "..."
-            : userMessage;
+        urlProcessingPromise = processUrls(extractedUrls).then(urlData => {
+          const urlContent = urlData
+            .filter(data => data.content && !data.error)
+            .map(data => `URL: ${data.url}\nTitle: ${data.title}\nContent: ${data.content.substring(0, 1500)}\n---`)
+            .join('\n');
+
+          // Send completion status
+          res.write(JSON.stringify({
+            type: "url_processing",
+            status: "completed",
+            processed: urlData.length,
+            successful: urlData.filter(d => !d.error).length
+          }) + "\n");
+
+          return { urlData, urlContent, processedUrls: extractedUrls };
+        }).catch(error => {
+          console.error("❌ URL processing error:", error);
+          res.write(JSON.stringify({
+            type: "url_processing",
+            status: "error",
+            error: "Failed to process URLs"
+          }) + "\n");
+          return { urlData: [], urlContent: "", processedUrls: [] };
+        });
       }
     }
 
-    // 🚀 GET CONTEXT PROPERLY (but efficiently)
-    let summaryContext = "";
-
+    // Task 2: Context Retrieval (optimized single query)
+    let contextPromise = Promise.resolve({ summaryContext: "", shouldRename: false, newConversationName: null });
     if (conversation_id) {
-      try {
-        const summaryResult = await executeQuery(
-          "SELECT summarized_chat FROM chat_history WHERE conversation_id = ? AND summarized_chat IS NOT NULL ORDER BY created_at DESC LIMIT 1",
-          [conversation_id]
-        );
+      contextPromise = executeQuery(
+        `SELECT 
+          c.name as conversation_name,
+          ch.summarized_chat,
+          ch.user_message,
+          ch.response,
+          ch.url_content,
+          ch.extracted_text
+         FROM conversations c
+         LEFT JOIN chat_history ch ON ch.conversation_id = c.id
+         WHERE c.id = ? AND c.user_id = ?
+         ORDER BY ch.created_at DESC
+         LIMIT 3`,
+        [conversation_id, user_id]
+      ).then(results => {
+        let summaryContext = "";
+        let shouldRename = false;
+        let newConversationName = null;
 
-        if (summaryResult && summaryResult.length > 0 && summaryResult[0]?.summarized_chat) {
-          summaryContext = summaryResult[0].summarized_chat;
+        if (results && results.length > 0) {
+          const conversationName = results[0]?.conversation_name;
+          
+          // Check if rename needed
+          if (userMessage && (conversationName === "New Conversation" || conversationName === "New Chat" || !conversationName)) {
+            shouldRename = true;
+            newConversationName = userMessage.length > 20 ? userMessage.substring(0, 17) + "..." : userMessage;
+          }
+
+          // Get latest summary
+          const latestSummary = results[0]?.summarized_chat;
+          if (latestSummary) {
+            summaryContext = latestSummary;
+          } else {
+            // Fallback: create quick context from recent messages
+            const recentContext = results
+              .filter(item => item.user_message || item.response)
+              .slice(0, 2)
+              .reverse()
+              .map(item => {
+                let context = "";
+                if (item.user_message) context += `User: ${item.user_message.substring(0, 200)}\n`;
+                if (item.response) context += `AI: ${item.response.substring(0, 200)}\n`;
+                return context;
+              })
+              .join("");
+            
+            if (recentContext) {
+              summaryContext = `Recent conversation:\n${recentContext}`;
+            }
+          }
         }
-      } catch (contextError) {
-        console.error("❌ Context fetch error:", contextError);
-      }
+
+        return { summaryContext, shouldRename, newConversationName };
+      }).catch(error => {
+        console.error("❌ Context fetch error:", error);
+        return { summaryContext: "", shouldRename: false, newConversationName: null };
+      });
     }
 
+    // Task 3: Generate suggestions in parallel
+    const suggestionPromise = generateFastSuggestions(userMessage);
+
+    // ⚡ WAIT FOR CRITICAL TASKS (but don't block on URLs if they're slow)
+    const [contextResult] = await Promise.all([contextPromise]);
+    const { summaryContext, shouldRename, newConversationName } = contextResult;
+
+    // 🧠 BUILD AI MESSAGES EFFICIENTLY
     const currentDate = new Date().toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
       day: "numeric",
     });
 
-    // 🧠 PROPER SYSTEM PROMPT WITH FULL CONTEXT
     const systemPrompt = {
       role: "system",
       content: `You are QhashAI — a highly intelligent AI assistant created by the QuantumHash development team in 2024.
@@ -589,7 +470,8 @@ Current date: ${currentDate}.
 
 When asked your name: "My name is QhashAI."
 Developer: "I was developed by the QuantumHash development team."
-Knowledge: "I've got information up to the present, ${currentDate}."
+
+You can analyze content from URLs and documents. When referencing external content, cite your sources.
 
 Be helpful, accurate, professional, and use all available context to provide the best possible response.`,
     };
@@ -606,10 +488,9 @@ Be helpful, accurate, professional, and use all available context to provide the
 
     // Add document context if available
     if (extracted_summary && extracted_summary !== "No readable content") {
-      const structuredDocs = `DOCUMENT CONTEXT:\n${extracted_summary}`;
       finalMessages.push({
         role: "system",
-        content: structuredDocs.substring(0, 15000),
+        content: `DOCUMENT CONTEXT:\n${extracted_summary.substring(0, 12000)}`,
       });
     }
 
@@ -624,29 +505,24 @@ Be helpful, accurate, professional, and use all available context to provide the
 
     finalMessages.push({ role: "user", content: fullUserMessage });
 
-    // 🚀 STREAM AI RESPONSE
+    // 🚀 START AI RESPONSE STREAM IMMEDIATELY
     let aiResponse = "";
-    let suggestions = [];
 
     try {
-      // Generate suggestions in parallel
-      const suggestionPromise = generateFastSuggestions(userMessage);
-
-      // Stream the main response
       const stream = await deepseek.chat.completions.create({
         model: "deepseek-chat",
         messages: finalMessages,
         temperature: 0.7,
         max_tokens: 1200,
-        stream: true, // Enable streaming
+        stream: true,
       });
 
-      // Send initial metadata
+      // Send initial metadata (without waiting for URLs if they're still processing)
       res.write(
         JSON.stringify({
           type: "start",
           conversation_id,
-          conversation_name: newConversationName, // 🎯 Send immediately
+          conversation_name: newConversationName,
           conversation_renamed: shouldRename,
           uploaded_files: uploadedFiles.map((file) => ({
             file_name: file.file_name,
@@ -674,8 +550,18 @@ Be helpful, accurate, professional, and use all available context to provide the
         }
       }
 
-      // Wait for suggestions to complete
-      suggestions = await suggestionPromise;
+      // Wait for remaining tasks to complete
+      const [urlResult, suggestions] = await Promise.all([
+        urlProcessingPromise,
+        suggestionPromise
+      ]);
+
+      const { urlData, urlContent, processedUrls } = urlResult;
+
+      // Add URL context to user message if URLs were processed
+      if (processedUrls.length > 0) {
+        fullUserMessage += `\n[Referenced URLs: ${processedUrls.join(", ")}]`;
+      }
 
       // Send final data
       res.write(
@@ -683,32 +569,47 @@ Be helpful, accurate, professional, and use all available context to provide the
           type: "end",
           suggestions: suggestions,
           full_response: aiResponse,
+          processed_urls: urlData.map(data => ({
+            url: data.url,
+            title: data.title,
+            success: !data.error,
+            error: data.error
+          })),
+          context: {
+            document_available: !!extracted_summary,
+            conversation_context_available: !!summaryContext,
+            url_content_available: !!urlContent,
+            urls_processed: urlData.length
+          },
         }) + "\n"
       );
 
       res.end();
 
-      // 🔄 ALL BACKGROUND PROCESSING (AFTER RESPONSE SENT)
+      // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
       process.nextTick(() => {
         handleAllBackgroundTasksOptimized(
           conversation_id,
-          userMessage,
+          fullUserMessage, // Use the full message with URL references
           aiResponse,
           uploadedFiles,
           extracted_summary,
           suggestions,
           user_id,
           shouldRename,
-          newConversationName
+          newConversationName,
+          processedUrls,
+          urlData,
+          urlContent // Pass URL content for summary generation
         );
       });
+
     } catch (aiError) {
       console.error("AI API error:", aiError);
       res.write(
         JSON.stringify({
           type: "error",
-          error:
-            "I'm having trouble processing your request. Please try again.",
+          error: "I'm having trouble processing your request. Please try again.",
         }) + "\n"
       );
       res.end();
@@ -721,7 +622,7 @@ Be helpful, accurate, professional, and use all available context to provide the
   }
 };
 
-// 🚀 FAST SUGGESTIONS (parallel with main response)
+// 🚀 OPTIMIZED FAST SUGGESTIONS
 async function generateFastSuggestions(userMessage) {
   try {
     const suggestionResult = await deepseek.chat.completions.create({
@@ -729,38 +630,41 @@ async function generateFastSuggestions(userMessage) {
       messages: [
         {
           role: "system",
-          content:
-            "Based on the user's message, generate 3 short follow-up questions. Reply only with numbered list.",
+          content: "Generate 3 short follow-up questions. Reply only with numbered list.",
         },
-        { role: "user", content: userMessage },
+        { role: "user", content: userMessage || "Continue the conversation" },
       ],
       temperature: 0.8,
-      max_tokens: 100,
+      max_tokens: 80, // Reduced for speed
     });
 
     const rawSuggestion = suggestionResult.choices?.[0]?.message?.content || "";
     return rawSuggestion
       .split("\n")
-      .map((s) =>
-        s
-          .replace(/^[\s\d\-•.]+/, "")
-          .replace(/[.?!]+$/, "")
-          .trim()
-      )
+      .map((s) => s.replace(/^[\s\d\-•.]+/, "").replace(/[.?!]+$/, "").trim())
       .filter(Boolean)
       .slice(0, 3);
   } catch (error) {
     console.error("❌ Fast suggestion failed:", error);
-    return [
-      "Tell me more about this",
-      "What are the next steps?",
-      "Can you provide more details?",
-    ];
+    return ["Tell me more about this", "What are the next steps?", "Can you provide more details?"];
   }
 }
 
 // 🚀 OPTIMIZED BACKGROUND TASKS WITH USER VALIDATION
-async function handleAllBackgroundTasksOptimized(conversation_id, userMessage, aiResponse, uploadedFiles, extracted_summary, suggestions, user_id, shouldRename, newConversationName) {
+// 🚀 OPTIMIZED BACKGROUND TASKS WITH USER VALIDATION AND URL SUPPORT
+async function handleAllBackgroundTasksOptimized(
+  conversation_id, 
+  userMessage, 
+  aiResponse, 
+  uploadedFiles, 
+  extracted_summary, 
+  suggestions, 
+  user_id, 
+  shouldRename, 
+  newConversationName,
+  processedUrls = [],
+  urlData = []
+) {
   try {
     console.log("🔄 Starting optimized background tasks for conversation:", conversation_id, "user:", user_id);
 
@@ -789,8 +693,8 @@ async function handleAllBackgroundTasksOptimized(conversation_id, userMessage, a
 
     // 🚀 STEP 2: Parallel background operations
     const backgroundTasks = [
-      // Save to database
-      saveToDatabase(conversation_id, userMessage, aiResponse, uploadedFiles, extracted_summary, suggestions),
+      // Save to database with URL data
+      saveToDatabase(conversation_id, userMessage, aiResponse, uploadedFiles, extracted_summary, suggestions, processedUrls, urlData),
       
       // Rename conversation ONLY if needed (skip DB query since we already checked)
       shouldRename ? executeRename(conversation_id, newConversationName, user_id) : Promise.resolve(false),
@@ -806,7 +710,8 @@ async function handleAllBackgroundTasksOptimized(conversation_id, userMessage, a
       rename: shouldRename ? (renameResult.status === 'fulfilled' ? "✅ Done" : "❌ Failed") : "⏭️ Skipped", 
       summary: summaryResult.status === 'fulfilled' ? "✅ Generated" : "❌ Failed",
       conversation_id: conversation_id,
-      user_id: user_id
+      user_id: user_id,
+      urls_processed: urlData.length
     });
 
   } catch (error) {
@@ -814,14 +719,16 @@ async function handleAllBackgroundTasksOptimized(conversation_id, userMessage, a
   }
 }
 
-// 🚀 SAVE TO DATABASE
+// 🚀 SAVE TO DATABASE WITH URL SUPPORT
 async function saveToDatabase(
   conversation_id,
   userMessage,
   aiResponse,
   uploadedFiles,
   extracted_summary,
-  suggestions
+  suggestions,
+  processedUrls = [],
+  urlData = []
 ) {
   try {
     const filePaths = uploadedFiles
@@ -833,8 +740,31 @@ async function saveToDatabase(
       .filter(Boolean)
       .join(",");
 
+    // Prepare URL data for database
+    const urlsString = processedUrls.length > 0 ? processedUrls.join(",") : null;
+    
+    const urlContentString = urlData.length > 0 
+      ? urlData
+          .filter(data => data.content && !data.error)
+          .map(data => `[${data.title}] ${data.content}`)
+          .join("\n---\n")
+      : null;
+
+    const urlMetadata = urlData.length > 0 
+      ? JSON.stringify(urlData.map(data => ({
+          url: data.url,
+          title: data.title,
+          description: data.description,
+          success: !data.error,
+          error: data.error,
+          metadata: data.metadata
+        })))
+      : null;
+
     await executeQuery(
-      "INSERT INTO chat_history (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, suggestions) VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)",
+      `INSERT INTO chat_history 
+       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, suggestions, urls, url_content, url_metadata) 
+       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)`,
       [
         conversation_id,
         userMessage,
@@ -843,10 +773,13 @@ async function saveToDatabase(
         extracted_summary || null,
         fileNames || null,
         JSON.stringify(suggestions) || null,
+        urlsString,
+        urlContentString,
+        urlMetadata
       ]
     );
 
-    console.log("✅ Database save successful for conversation:", conversation_id);
+    console.log("✅ Database save successful for conversation:", conversation_id, "with", urlData.length, "URLs");
     return true;
   } catch (error) {
     console.error("❌ Database save error:", error);
@@ -869,8 +802,7 @@ async function executeRename(conversation_id, newName, user_id) {
   }
 }
 
-// 🧠 GENERATE COMPREHENSIVE SUMMARY (BACKGROUND) - UPDATED
-// 🧠 GENERATE COMPREHENSIVE SUMMARY (BACKGROUND) - UPDATED
+// 🧠 GENERATE COMPREHENSIVE SUMMARY (BACKGROUND) - UPDATED FOR IMMEDIATE CONTEXT
 async function generateAndSaveComprehensiveSummary(
   conversation_id,
   currentUserMessage,
@@ -879,7 +811,7 @@ async function generateAndSaveComprehensiveSummary(
   try {
     console.log("🧠 Generating comprehensive summary...");
 
-    // Check message count (create summary after 4 messages = 2 exchanges)
+    // Check message count - create summary after EVERY message for full context
     const messageCountResult = await executeQuery(
       "SELECT COUNT(*) as count FROM chat_history WHERE conversation_id = ?",
       [conversation_id]
@@ -887,89 +819,100 @@ async function generateAndSaveComprehensiveSummary(
 
     const messageCount = messageCountResult[0]?.count || 0;
 
-    // Create summary after 2 complete exchanges (4 messages) instead of 6
-    if (messageCount < 3) {
-      // Will be 4 after current message is saved
-      console.log(
-        "🔄 Too few messages for summary (need at least 2 exchanges)"
-      );
+    // ✅ CREATE SUMMARY AFTER FIRST MESSAGE (instead of waiting for 6 messages)
+    if (messageCount < 1) {
+      console.log("🔄 No messages yet for summary generation");
       return false;
     }
 
-    // Get ENTIRE conversation history
+    // Get ENTIRE conversation history including URL content
     const fullHistory = await executeQuery(
-      "SELECT user_message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
+      "SELECT user_message, response, url_content, extracted_text FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
       [conversation_id]
     );
 
-    // Build complete conversation
+    // Build complete conversation with URL context and document context
     const completeConversation = [];
+    const allDocumentContext = [];
+    
     fullHistory.forEach((chat) => {
-      if (chat.user_message)
-        completeConversation.push({ role: "user", content: chat.user_message });
-      if (chat.response)
+      if (chat.user_message) {
+        let userContent = chat.user_message;
+        
+        // Add URL context if available
+        if (chat.url_content) {
+          userContent += `\n[URL Context: ${chat.url_content.substring(0, 1000)}]`;
+        }
+        
+        // Add document context if available
+        if (chat.extracted_text) {
+          userContent += `\n[Document Context: ${chat.extracted_text.substring(0, 500)}]`;
+          allDocumentContext.push(chat.extracted_text);
+        }
+        
+        completeConversation.push({ role: "user", content: userContent });
+      }
+      
+      if (chat.response) {
         completeConversation.push({
           role: "assistant",
           content: chat.response,
         });
+      }
     });
 
-    // Add current exchange
-    completeConversation.push({ role: "user", content: currentUserMessage });
+    // Add current exchange (this will be saved after summary generation)
+    let currentUserContent = currentUserMessage;
+    
+    // Check if current message has URL or document context (from the current request)
+    // This ensures we capture context from the current message too
+    completeConversation.push({ role: "user", content: currentUserContent });
     completeConversation.push({
       role: "assistant",
       content: currentAiResponse,
     });
 
-    console.log(
-      `📊 Creating summary for ${completeConversation.length} messages`
-    );
+    console.log(`📊 Creating summary for ${completeConversation.length} messages`);
 
-    // Create comprehensive summary
+    // Create comprehensive summary that includes ALL context
     const conversationText = completeConversation
       .map((msg) => `${msg.role}: ${msg.content}`)
       .join("\n");
 
-    // Adjust summary prompt based on conversation length
-    const isShortConversation = completeConversation.length <= 8;
-
+    // ✅ ALWAYS CREATE DETAILED SUMMARY (even for single message)
     const summaryPrompt = [
       {
         role: "system",
-        content: isShortConversation
-          ? `Create a concise summary of this conversation. Include:
-1. Main topic/request
-2. Key information shared
-3. User's specific needs or preferences
-4. Important context for future responses
+        content: `Create a comprehensive summary of this conversation that will serve as context for future AI responses. Include:
 
-Keep it focused and concise (100-150 words).`
-          : `Create a comprehensive summary of this conversation. Include:
-1. Main topics discussed
-2. Key questions and answers  
-3. Important information shared
-4. User preferences or requirements
-5. Context that would help in future responses
+1. Main topics and questions discussed
+2. Key information shared (including URL content, document content, and file uploads)
+3. User's specific needs, preferences, and requirements
+4. Important context and background information
+5. Any technical details, examples, or specific requests
+6. User's communication style and preferences
 
-Keep it detailed but concise (200-300 words).`,
+This summary will be used to maintain context in future conversations, so be thorough and include all relevant details that would help provide better responses.
+
+Keep it detailed but well-organized (150-400 words depending on conversation length).`,
       },
       {
         role: "user",
-        content: `Conversation to summarize:\n${conversationText}`,
+        content: `Conversation to summarize:\n${conversationText.substring(0, 12000)}`, // Increased limit for more context
       },
     ];
 
     const summaryResult = await deepseek.chat.completions.create({
       model: "deepseek-chat",
       messages: summaryPrompt,
-      temperature: 0.3,
-      max_tokens: isShortConversation ? 200 : 400, // Adjust based on conversation length
+      temperature: 0.2, // Lower temperature for more consistent summaries
+      max_tokens: 500, // Increased for more detailed summaries
     });
 
     const summary = summaryResult.choices?.[0]?.message?.content || "";
 
     if (summary && summary.length > 10) {
-      // Update the latest chat_history record with comprehensive summary
+      // ✅ ALWAYS UPDATE THE LATEST CHAT HISTORY WITH COMPREHENSIVE SUMMARY
       await executeQuery(
         "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
         [summary, conversation_id]
@@ -977,18 +920,38 @@ Keep it detailed but concise (200-300 words).`,
 
       console.log("✅ Summary generated and saved:", {
         length: summary.length,
-        type: isShortConversation ? "Short conversation" : "Long conversation",
         message_count: completeConversation.length,
+        conversation_id: conversation_id,
+        summary_preview: summary.substring(0, 100) + "..."
       });
+      
       return true;
     }
 
+    console.log("⚠️ Summary generation failed - empty or too short");
     return false;
+    
   } catch (error) {
     console.error("❌ Comprehensive summary generation failed:", error);
-    throw error;
+    
+    // ✅ FALLBACK: Create a basic summary if AI summary fails
+    try {
+      const basicSummary = `User discussed: ${currentUserMessage.substring(0, 200)}${currentUserMessage.length > 200 ? '...' : ''}. AI provided assistance with this topic.`;
+      
+      await executeQuery(
+        "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+        [basicSummary, conversation_id]
+      );
+      
+      console.log("✅ Fallback summary saved");
+      return true;
+    } catch (fallbackError) {
+      console.error("❌ Even fallback summary failed:", fallbackError);
+      return false;
+    }
   }
 }
+
 
 exports.guestChat = async (req, res) => {
   const { userMessage } = req.body;
@@ -1007,6 +970,63 @@ exports.guestChat = async (req, res) => {
       'Access-Control-Allow-Headers': 'Cache-Control'
     });
 
+    // 🔗 EXTRACT AND PROCESS URLs FROM USER MESSAGE
+    let urlData = [];
+    let urlContent = "";
+    let processedUrls = [];
+
+    const extractedUrls = extractUrls(userMessage);
+    
+    if (extractedUrls.length > 0) {
+      console.log(`🔗 Guest mode: Found ${extractedUrls.length} URLs:`, extractedUrls);
+      
+      // Send URL processing status
+      res.write(JSON.stringify({
+        type: "url_processing",
+        status: "started",
+        urls: extractedUrls,
+        count: extractedUrls.length,
+        guest_mode: true
+      }) + '\n');
+
+      try {
+        urlData = await processUrls(extractedUrls);
+        processedUrls = extractedUrls;
+        
+        // Create URL content summary for AI context
+        urlContent = urlData
+          .filter(data => data.content && !data.error)
+          .map(data => `
+URL: ${data.url}
+Title: ${data.title}
+Description: ${data.description}
+Content: ${data.content.substring(0, 2000)}
+---`)
+          .join('\n');
+
+        console.log(`✅ Guest mode: Successfully processed ${urlData.filter(d => !d.error).length}/${urlData.length} URLs`);
+        
+        // Send URL processing completion
+        res.write(JSON.stringify({
+          type: "url_processing",
+          status: "completed",
+          processed: urlData.length,
+          successful: urlData.filter(d => !d.error).length,
+          failed: urlData.filter(d => d.error).length,
+          guest_mode: true
+        }) + '\n');
+        
+      } catch (urlError) {
+        console.error("❌ Guest mode URL processing error:", urlError);
+        res.write(JSON.stringify({
+          type: "url_processing",
+          status: "error",
+          error: "Failed to process some URLs",
+          guest_mode: true
+        }) + '\n');
+      }
+    }
+
     // 📅 Get current date
     const currentDate = new Date().toLocaleDateString("en-US", {
       year: "numeric",
@@ -1014,13 +1034,33 @@ exports.guestChat = async (req, res) => {
       day: "numeric",
     });
 
-    // 🧠 Minimal system prompt for speed
+    // 🧠 Enhanced system prompt with URL capabilities for guest mode
     const systemPrompt = {
       role: "system",
-      content: `You are QhashAI, an AI assistant by QuantumHash team (2024). Current date: ${currentDate}. Be helpful, accurate, and concise.`
+      content: `You are QhashAI, an AI assistant by QuantumHash team (2024). Current date: ${currentDate}.
+
+You can analyze and understand content from URLs that users share. When referencing URL content, be specific about which website or source you're citing.
+
+Be helpful, accurate, and concise. This is guest mode, so provide complete responses without requiring conversation history.`
     };
 
-    const messages = [systemPrompt, { role: "user", content: userMessage }];
+    const messages = [systemPrompt];
+
+    // Add URL content context if available
+    if (urlContent) {
+      messages.push({
+        role: "system",
+        content: `URL CONTENT CONTEXT:\n${urlContent}`,
+      });
+    }
+
+    // Prepare user message with URL references
+    let fullUserMessage = userMessage;
+    if (processedUrls.length > 0) {
+      fullUserMessage += `\n[Referenced URLs: ${processedUrls.join(", ")}]`;
+    }
+
+    messages.push({ role: "user", content: fullUserMessage });
 
     // 🔀 Choose AI provider
     const aiProvider = process.env.USE_OPENAI === "true" ? openai : deepseek;
@@ -1035,7 +1075,17 @@ exports.guestChat = async (req, res) => {
       // Send initial metadata
       res.write(JSON.stringify({
         type: 'start',
-        guest_mode: true
+        guest_mode: true,
+        processed_urls: urlData.map(data => ({
+          url: data.url,
+          title: data.title,
+          success: !data.error,
+          error: data.error
+        })),
+        context: {
+          url_content_available: !!urlContent,
+          urls_processed: urlData.length
+        }
       }) + '\n');
 
       // Create streaming request
@@ -1043,7 +1093,7 @@ exports.guestChat = async (req, res) => {
         model,
         messages,
         temperature: 0.7,
-        max_tokens: 1200, // Reduced for faster response
+        max_tokens: 1200,
         stream: true,
       });
 
@@ -1067,16 +1117,33 @@ exports.guestChat = async (req, res) => {
         type: 'end',
         suggestions: suggestions,
         full_response: aiResponse,
-        guest_mode: true
+        guest_mode: true,
+        processed_urls: urlData.map(data => ({
+          url: data.url,
+          title: data.title,
+          success: !data.error,
+          error: data.error,
+          description: data.description
+        })),
+        context: {
+          url_content_available: !!urlContent,
+          urls_processed: urlData.length
+        }
       }) + '\n');
 
       res.end();
 
+      // 📊 Optional: Log guest interactions with URLs for analytics (without storing personal data)
+      if (urlData.length > 0) {
+        console.log(`📊 Guest interaction: ${urlData.length} URLs processed, ${urlData.filter(d => !d.error).length} successful`);
+      }
+
     } catch (aiError) {
-      console.error("AI API error:", aiError);
+      console.error("AI API error in guest mode:", aiError);
       res.write(JSON.stringify({
         type: 'error',
-        error: "I'm having trouble processing your request. Please try again."
+        error: "I'm having trouble processing your request. Please try again.",
+        guest_mode: true
       }) + '\n');
       res.end();
     }
@@ -1089,34 +1156,57 @@ exports.guestChat = async (req, res) => {
   }
 };
 
-// 🚀 SIMPLIFIED FAST SUGGESTIONS FOR GUEST CHAT
+// 🚀 ENHANCED FAST SUGGESTIONS FOR GUEST CHAT WITH URL AWARENESS
 async function generateFastGuestSuggestions(userMessage, aiProvider, model) {
   try {
+    // Check if message contains URLs for more relevant suggestions
+    const hasUrls = extractUrls(userMessage).length > 0;
+    
+    const suggestionPrompt = hasUrls 
+      ? "Generate 3 short follow-up questions about the content or URLs mentioned. Reply only with numbered list."
+      : "Generate 3 short follow-up questions based on the user's message. Reply only with numbered list.";
+
     const suggestionResult = await aiProvider.chat.completions.create({
       model,
       messages: [
         {
           role: "system",
-          content: "Generate 3 short follow-up questions based on the user's message. Reply only with numbered list."
+          content: suggestionPrompt
         },
         { role: "user", content: userMessage }
       ],
       temperature: 0.8,
-      max_tokens: 80, // Very short for speed
+      max_tokens: 100, // Increased slightly for URL-related suggestions
     });
 
     const rawSuggestion = suggestionResult.choices?.[0]?.message?.content || "";
     
-    return rawSuggestion
+    const suggestions = rawSuggestion
       .split("\n")
       .map((s) => s.replace(/^[\d\-\•\s]+/, "").trim())
       .filter(Boolean)
       .slice(0, 3);
+
+    // Fallback suggestions based on whether URLs were present
+    if (suggestions.length === 0) {
+      return hasUrls 
+        ? ["Can you explain more about this content?", "What are the key points?", "How does this relate to my question?"]
+        : ["Tell me more", "What else?", "Can you explain further?"];
+    }
+
+    return suggestions;
+    
   } catch (suggestionError) {
     console.error("⚠️ Failed to generate guest suggestions:", suggestionError.message);
-    return ["Tell me more", "What else?", "Can you explain further?"];
+    
+    // Smart fallback based on message content
+    const hasUrls = extractUrls(userMessage).length > 0;
+    return hasUrls 
+      ? ["Summarize the main points", "What are the key insights?", "How can I use this information?"]
+      : ["Tell me more", "What else?", "Can you explain further?"];
   }
 }
+
 
 //  delete function
 exports.softDeleteConversation = async (req, res) => {
