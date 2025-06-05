@@ -630,7 +630,7 @@ async function generateFastSuggestions(userMessage) {
       messages: [
         {
           role: "system",
-          content: "Generate 3 short follow-up questions. Reply only with numbered list.",
+          content: "Generate 5 short follow-up questions. Reply only with numbered list.",
         },
         { role: "user", content: userMessage || "Continue the conversation" },
       ],
@@ -643,7 +643,7 @@ async function generateFastSuggestions(userMessage) {
       .split("\n")
       .map((s) => s.replace(/^[\s\d\-•.]+/, "").replace(/[.?!]+$/, "").trim())
       .filter(Boolean)
-      .slice(0, 3);
+      .slice(0, 5);
   } catch (error) {
     console.error("❌ Fast suggestion failed:", error);
     return ["Tell me more about this", "What are the next steps?", "Can you provide more details?"];
