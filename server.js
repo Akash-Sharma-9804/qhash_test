@@ -188,7 +188,8 @@ const PORT = process.env.PORT || 3000;
 // ✅ Allowed origins for both local & production
 const allowedOrigins = [
   "http://localhost:5174",          // Local dev
-  "https://drillingnwk.com/",
+  // "https://drillingnwk.com/",
+  "qhash-test-frontend.vercel.app",
   "*"
 ];
 
