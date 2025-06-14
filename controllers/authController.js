@@ -135,12 +135,12 @@ exports.verifyOtp = async (req, res) => {
     let conversation_id;
     const [emptyConversations] = await connection.query(
       `SELECT c.id 
-       FROM conversations c 
-       LEFT JOIN chat_history ch ON c.id = ch.conversation_id 
-       WHERE c.user_id = ? 
-       GROUP BY c.id 
-       HAVING COUNT(ch.id) = 0 
-       LIMIT 1`,
+   FROM conversations c 
+   LEFT JOIN chat_history ch ON c.id = ch.conversation_id 
+   WHERE c.user_id = ? AND c.is_deleted = FALSE
+   GROUP BY c.id 
+   HAVING COUNT(ch.id) = 0 
+   LIMIT 1`,
       [user_id]
     );
 
@@ -263,7 +263,7 @@ exports.login = async (req, res) => {
   `SELECT c.id 
    FROM conversations c 
    LEFT JOIN chat_history ch ON c.id = ch.conversation_id 
-   WHERE c.user_id = ? 
+   WHERE c.user_id = ? AND c.is_deleted = FALSE
    GROUP BY c.id 
    HAVING COUNT(ch.id) = 0 
    LIMIT 1`,
@@ -494,12 +494,12 @@ exports.googleCallback = async (req, res) => {
     try {
       const [emptyConversations] = await connection.query(
         `SELECT c.id 
-         FROM conversations c 
-         LEFT JOIN chat_history ch ON c.id = ch.conversation_id 
-         WHERE c.user_id = ? 
-         GROUP BY c.id 
-         HAVING COUNT(ch.id) = 0 
-         LIMIT 1`,
+   FROM conversations c 
+   LEFT JOIN chat_history ch ON c.id = ch.conversation_id 
+   WHERE c.user_id = ? AND c.is_deleted = FALSE
+   GROUP BY c.id 
+   HAVING COUNT(ch.id) = 0 
+   LIMIT 1`,
         [user.id]
       );
 

@@ -36,9 +36,9 @@ exports.createConversation = async (req, res) => {
     // ✅ CONSISTENT DATABASE QUERY
     const recentConversations = await executeQuery(
       `SELECT id, name FROM conversations 
-       WHERE user_id = ? 
-       ORDER BY created_at DESC 
-       LIMIT 1`,
+   WHERE user_id = ? AND is_deleted = FALSE
+   ORDER BY created_at DESC 
+   LIMIT 1`,
       [user_id]
     );
 
@@ -1615,9 +1615,9 @@ exports.softDeleteConversation = async (req, res) => {
         // Step 1: Find the most recent conversation for this user (excluding the deleted one)
         const recentConversations = await executeQuery(
           `SELECT id, name FROM conversations 
-           WHERE user_id = ? AND is_deleted = FALSE
-           ORDER BY created_at DESC 
-           LIMIT 1`,
+   WHERE user_id = ? AND is_deleted = FALSE
+   ORDER BY created_at DESC 
+   LIMIT 1`,
           [userId]
         );
 
