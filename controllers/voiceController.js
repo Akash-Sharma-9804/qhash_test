@@ -354,25 +354,80 @@ const stopSendingSilence = () => {
 const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
   console.log(`🎤 [Voice] Starting live session for user: ${userId}, conversation: ${conversationId}`);
 
-  // 🚀 GET CURRENT CONVERSATION ID LIKE IN askChatbot
-  if (!conversationId) {
-    const [last] = await executeQuery(
-      "SELECT id FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", 
-      [userId]
+  // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED (like chatController.js)
+  if (conversationId && !isNaN(conversationId)) {
+    const ownershipCheck = await executeQuery(
+      "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
+      [conversationId, userId]
     );
-    if (last.length) {
-      conversationId = last[0].id;
-      console.log(`📌 Using latest conversation: ${conversationId}`);
-    } else {
-      const [newConv] = await executeQuery(
-        "INSERT INTO conversations (user_id, name) VALUES (?, ?)", 
-        [userId, 'New Conversation']
+
+    if (!ownershipCheck || ownershipCheck.length === 0) {
+      console.warn("⚠️ Provided conversation invalid or not owned. Trying fallback...");
+      
+      // Try fallback to latest conversation (like chatController.js)
+      const latest = await executeQuery(
+        `SELECT id FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY updated_at DESC LIMIT 1`,
+        [userId]
       );
-      conversationId = newConv.insertId;
-      console.log(`🆕 Created new conversation: ${conversationId}`);
+
+      if (latest && latest.length > 0) {
+        conversationId = latest[0].id;
+        console.log("✅ Fallback to latest active conversation:", conversationId);
+      } else {
+        console.error("❌ No valid conversation found and none provided.");
+        ws.send(JSON.stringify({ type: "error", error: "No conversation found." }));
+        return;
+      }
+    } else {
+      console.log(`✅ Using provided conversation ID: ${conversationId}`);
     }
   } else {
-    console.log(`✅ Using provided conversation ID: ${conversationId}`);
+    // ✅ NO CONVERSATION PROVIDED - Use empty conversation logic (like chatController.js createConversation)
+    console.log("🔍 No conversation provided, checking for empty conversations...");
+    
+    const recentConversations = await executeQuery(
+      `SELECT id, name FROM conversations 
+       WHERE user_id = ? AND is_deleted = FALSE
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [userId]
+    );
+
+    console.log("🔍 Recent conversations for user", userId, ":", recentConversations);
+
+    if (recentConversations && recentConversations.length > 0) {
+      const recentConversation = recentConversations[0];
+
+      // Check if this conversation has any messages
+      const messageCountResult = await executeQuery(
+        `SELECT COUNT(*) as count FROM chat_history WHERE conversation_id = ?`,
+        [recentConversation.id]
+      );
+
+      const messageCount = messageCountResult[0]?.count || 0;
+
+      // If no messages, reuse this conversation
+      if (messageCount === 0) {
+        conversationId = recentConversation.id;
+        console.log("🔄 Reused empty conversation:", conversationId, "for user:", userId);
+      } else {
+        // Create new conversation if recent one has messages
+        const newConversationResult = await executeQuery(
+          "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+          [userId, 'New Conversation']
+        );
+        conversationId = newConversationResult.insertId;
+        console.log("🆕 Created new conversation:", conversationId, "for user:", userId);
+      }
+    } else {
+      // No conversations exist, create new one
+      const newConversationResult = await executeQuery(
+        "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+        [userId, 'New Conversation']
+      );
+      conversationId = newConversationResult.insertId;
+      console.log("🆕 Created first conversation:", conversationId, "for user:", userId);
+    }
   }
 
   // ✅ Initialize Deepgram STT WebSocket
