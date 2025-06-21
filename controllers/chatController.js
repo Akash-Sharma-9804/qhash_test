@@ -384,7 +384,7 @@ exports.getChatHistory = async (req, res) => {
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
-  let { userMessage, conversation_id, extracted_summary } = req.body;
+  let { userMessage, conversation_id, extracted_summary, _file_upload_ids } = req.body;
   const user_id = req.user?.user_id;
   // const uploadedFiles = req.body.uploaded_file_metadata || [];
 
@@ -427,6 +427,10 @@ exports.askChatbot = async (req, res) => {
 
       if (!ownershipCheck || ownershipCheck.length === 0) {
         console.error("❌ Unauthorized conversation access");
+
+           // ✅ ROLLBACK FILES IF UNAUTHORIZED
+        await rollbackPendingFiles(_file_upload_ids);
+
         res.write(JSON.stringify({
           type: "error",
           error: "Unauthorized: Conversation does not belong to user",
@@ -446,7 +450,7 @@ exports.askChatbot = async (req, res) => {
     const contextPromise = getConversationContextOptimized(conversation_id, user_id);
     
     // Task 3: Get file context based on whether there's a new upload
- const fileContextPromise = getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage);    
+const fileContextPromise = getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage);   
     // Task 4: Generate suggestions
     const suggestionPromise = generateFastSuggestions(userMessage);
 
@@ -645,6 +649,16 @@ try {
         }
       }
 
+          // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
+      if (_file_upload_ids && Array.isArray(_file_upload_ids) && _file_upload_ids.length > 0) {
+        try {
+          await confirmPendingFiles(_file_upload_ids);
+          console.log(`✅ Confirmed ${_file_upload_ids.length} files after successful AI response`);
+        } catch (confirmError) {
+          console.error("❌ Failed to confirm files:", confirmError);
+        }
+      }
+
       // Send final data
       res.write(JSON.stringify({
         type: "end",
@@ -672,25 +686,29 @@ try {
 
       // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
             // 🔄 BACKGROUND PROCESSING
-      process.nextTick(() => {
-        handleAllBackgroundTasksOptimized(
-          conversation_id,
-          fullUserMessage,
-          aiResponse,
-          extracted_summary,
-          suggestions,
-          user_id,
-          shouldRename, // ✅ Add this parameter
-          finalConversationName,
-          processedUrls,
-          urlData,
-          urlContent,
-          fileContext
-        );
-      });
+    process.nextTick(() => {
+  handleAllBackgroundTasksOptimized(
+    conversation_id,
+    fullUserMessage,
+    aiResponse,
+    extracted_summary,        // ✅ FIX: Move extracted_summary here
+    suggestions,
+    user_id,                  // ✅ FIX: Move user_id here  
+    shouldRename,
+    finalConversationName,
+    processedUrls,
+    urlData,
+    urlContent,
+    fileContext
+  );
+});
 
     } catch (aiError) {
       console.error("AI API error:", aiError);
+
+      // ✅ ROLLBACK FILES ON AI ERROR
+      await rollbackPendingFiles(_file_upload_ids);
+
       res.write(JSON.stringify({
         type: "error",
         error: "I'm having trouble processing your request. Please try again.",
@@ -699,6 +717,10 @@ try {
     }
   } catch (error) {
     console.error("❌ Chat controller error:", error.message);
+      
+    // ✅ ROLLBACK FILES ON GENERAL ERROR
+    await rollbackPendingFiles(_file_upload_ids);
+    
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
     }
@@ -804,6 +826,48 @@ async function processUrlsOptimized(userMessage, res) {
   return { urlData, urlContent, processedUrls, fullUserMessage };
 }
 
+// ✅ HELPER FUNCTION: ROLLBACK PENDING FILES
+async function rollbackPendingFiles(fileIds) {
+  if (!fileIds || !Array.isArray(fileIds) || fileIds.length === 0) {
+    return;
+  }
+
+  try {
+    console.log(`🔄 Rolling back ${fileIds.length} pending files...`);
+    
+    // Delete from database
+    await executeQuery(
+      `DELETE FROM uploaded_files WHERE id IN (${fileIds.map(() => '?').join(',')}) AND status = 'pending_response'`,
+      fileIds
+    );
+    
+    console.log(`✅ Successfully rolled back ${fileIds.length} pending files`);
+  } catch (error) {
+    console.error("❌ Failed to rollback pending files:", error);
+  }
+}
+
+// ✅ HELPER FUNCTION: CONFIRM PENDING FILES
+async function confirmPendingFiles(fileIds) {
+  if (!fileIds || !Array.isArray(fileIds) || fileIds.length === 0) {
+    return;
+  }
+
+  try {
+    console.log(`✅ Confirming ${fileIds.length} pending files...`);
+    
+    // Update status to confirmed
+    await executeQuery(
+      `UPDATE uploaded_files SET status = 'confirmed' WHERE id IN (${fileIds.map(() => '?').join(',')}) AND status = 'pending_response'`,
+      fileIds
+    );
+    
+    console.log(`✅ Successfully confirmed ${fileIds.length} files`);
+  } catch (error) {
+    console.error("❌ Failed to confirm pending files:", error);
+  }
+}
+
 // 🚀 OPTIMIZED CONTEXT RETRIEVAL - Single optimized query
 async function getConversationContextOptimized(conversation_id, user_id) {
   if (!conversation_id) {
@@ -885,7 +949,7 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 }
 
   
-// ✅ FIX: Add userMessage parameter to getFileContextBasedOnUpload
+// ✅ UPDATE: Only get confirmed files for context
 async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage) {
   if (!conversation_id || isNaN(conversation_id)) {
     console.log("📄 No conversation_id provided - no file context available");
@@ -893,20 +957,23 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
   }
 
   try {
-    // ✅ CHECK IF THERE'S A NEW UPLOAD (extracted_summary indicates new file)
-    const hasNewUpload = extracted_summary && 
-                        extracted_summary !== "No readable content" && 
-                        extracted_summary.trim().length > 0;
+     // ✅ CHECK IF THERE'S A NEW UPLOAD - Fix the logic
+  const hasNewUpload = (extracted_summary && 
+                         extracted_summary !== "No readable content" && 
+                         extracted_summary.trim().length > 0);
+
+    console.log(`📄 Has new upload: ${hasNewUpload}, extracted_summary: ${!!extracted_summary}`);
 
     if (hasNewUpload) {
-      console.log("📄 New file uploaded - focusing on current upload only");
+      console.log("📄 New file uploaded - focusing on current upload");
       
-      // Get only the most recent files (uploaded in last 5 minutes)
+      // ✅ FIX: Get recent files INCLUDING pending ones for immediate context
       const recentFiles = await executeQuery(
         `SELECT file_path, extracted_text, file_metadata, created_at 
          FROM uploaded_files 
          WHERE conversation_id = ? AND user_id = ? 
          AND created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+         AND (status = 'confirmed' OR status = 'pending_response' OR status IS NULL)
          ORDER BY created_at DESC`,
         [conversation_id, user_id]
       );
@@ -949,21 +1016,32 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
           contextType: "current_upload"
         };
       }
+      
+      // ✅ FALLBACK: If no recent files found, use extracted_summary directly
+      if (extracted_summary && extracted_summary.trim().length > 0) {
+        return {
+          fileContext: `CURRENT UPLOADED FILE:\n${extracted_summary}`,
+          fileNames: ["Current Upload"],
+          fileCount: 1,
+          contextType: "current_upload"
+        };
+      }
     }
 
-    // ✅ NO NEW UPLOAD - CHECK IF USER EXPLICITLY ASKS ABOUT PREVIOUS FILES
+    // ✅ NO NEW UPLOAD - CHECK IF USER ASKS ABOUT PREVIOUS FILES
     const askingAboutPreviousFiles = checkIfAskingAboutPreviousFiles(userMessage);
 
     if (askingAboutPreviousFiles) {
-      console.log("📄 User asking about previous files - providing all file context");
-      return await getAllUploadedFilesContext(conversation_id, user_id);
+      console.log("📄 User asking about previous files - providing all confirmed file context");
+      return await getAllConfirmedFilesContext(conversation_id, user_id);
     }
 
-    // ✅ DEFAULT - PROVIDE MINIMAL CONTEXT (just file names for reference)
+    // ✅ DEFAULT - PROVIDE MINIMAL CONTEXT (only confirmed files)
     console.log("📄 No new upload, not asking about files - minimal context");
     const allFiles = await executeQuery(
       `SELECT file_metadata FROM uploaded_files 
        WHERE conversation_id = ? AND user_id = ? 
+       AND (status = 'confirmed' OR status IS NULL)
        ORDER BY created_at ASC`,
       [conversation_id, user_id]
     );
@@ -995,6 +1073,78 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
 
   } catch (error) {
     console.error("❌ Error getting smart file context:", error);
+    return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+  }
+}
+
+// ✅ NEW: GET ALL CONFIRMED FILES CONTEXT
+async function getAllConfirmedFilesContext(conversation_id, user_id) {
+  if (!conversation_id || isNaN(conversation_id)) {
+    console.log("📄 No conversation_id provided - no file context available");
+    return { fileContext: "", fileNames: [], fileCount: 0 };
+  }
+
+  try {
+    console.log(`🔍 Fetching confirmed files context for conversation: ${conversation_id}`);
+    
+    // ✅ GET ONLY CONFIRMED FILES
+    const uploadedFiles = await executeQuery(
+      `SELECT file_path, extracted_text, file_metadata, created_at 
+       FROM uploaded_files 
+       WHERE conversation_id = ? AND user_id = ? 
+       AND (status = 'confirmed' OR status IS NULL)
+       ORDER BY created_at ASC`,
+      [conversation_id, user_id]
+    );
+
+    if (!uploadedFiles || uploadedFiles.length === 0) {
+      console.log("📄 No confirmed uploaded files found for this conversation");
+      return { fileContext: "", fileNames: [], fileCount: 0 };
+    }
+
+    console.log(`📄 Found ${uploadedFiles.length} confirmed uploaded files with extracted text`);
+
+    const fileContexts = [];
+    const fileNames = [];
+
+    uploadedFiles.forEach((file, index) => {
+      if (file.extracted_text && 
+          file.extracted_text !== "No readable content extracted" && 
+          file.extracted_text !== "Text extraction failed" &&
+          file.extracted_text !== "[Error extracting text]") {
+        
+        let fileName = `File ${index + 1}`;
+        
+        if (file.file_metadata) {
+          try {
+            const metadata = JSON.parse(file.file_metadata);
+            fileName = metadata.original_filename || metadata.display_filename || fileName;
+          } catch (parseError) {
+            fileName = file.file_path.split('/').pop() || fileName;
+          }
+        } else {
+          fileName = file.file_path.split('/').pop() || fileName;
+        }
+        
+        fileNames.push(fileName);
+        fileContexts.push(`📎 FILE: ${fileName}\n${file.extracted_text}\n${'='.repeat(50)}`);
+      }
+    });
+
+    const combinedFileContext = fileContexts.length > 0 
+      ? `UPLOADED FILES CONTEXT:\n\n${fileContexts.join('\n\n')}`
+      : "";
+console.log(`✅ Combined confirmed file context: ${combinedFileContext.length} characters from ${fileContexts.length} files`);
+    
+    return { 
+      fileContext: combinedFileContext, 
+      fileNames: fileNames,
+      fileCount: fileContexts.length,
+      contextType: "all_files"
+    };
+
+  } catch (error) {
+    console.error("❌ Error fetching confirmed files context:", error);
     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
   }
 }
@@ -1104,87 +1254,6 @@ Be helpful, accurate, professional, and use all available context to provide the
 
 
 
- 
-// ✅ UPDATE GET ALL UPLOADED FILES CONTEXT
-async function getAllUploadedFilesContext(conversation_id, user_id) {
-  if (!conversation_id || isNaN(conversation_id)) {
-    console.log("📄 No conversation_id provided - no file context available");
-    return { fileContext: "", fileNames: [], fileCount: 0 };
-  }
-
-  try {
-    console.log(`🔍 Fetching uploaded files context for conversation: ${conversation_id}`);
-    
-    // ✅ GET FILES WITH METADATA - FULL CONTENT
-    const uploadedFiles = await executeQuery(
-      `SELECT file_path, extracted_text, file_metadata, created_at 
-       FROM uploaded_files 
-       WHERE conversation_id = ? AND user_id = ? 
-       ORDER BY created_at ASC`,
-      [conversation_id, user_id]
-    );
-
-    if (!uploadedFiles || uploadedFiles.length === 0) {
-      console.log("📄 No uploaded files found for this conversation");
-      return { fileContext: "", fileNames: [], fileCount: 0 };
-    }
-
-    console.log(`📄 Found ${uploadedFiles.length} uploaded files with extracted text`);
-
-    const fileContexts = [];
-    const fileNames = [];
-
-    uploadedFiles.forEach((file, index) => {
-      if (file.extracted_text && 
-          file.extracted_text !== "No readable content extracted" && 
-          file.extracted_text !== "Text extraction failed" &&
-          file.extracted_text !== "[Error extracting text]") {
-        
-        let fileName = `File ${index + 1}`;
-        
-        // ✅ EXTRACT FILENAME FROM METADATA OR PATH
-        if (file.file_metadata) {
-          try {
-            const metadata = JSON.parse(file.file_metadata);
-            fileName = metadata.original_filename || metadata.display_filename || fileName;
-          } catch (parseError) {
-            fileName = file.file_path.split('/').pop() || fileName;
-          }
-        } else {
-          fileName = file.file_path.split('/').pop() || fileName;
-        }
-        
-        fileNames.push(fileName);
-        // ✅ PROVIDE FULL CONTENT - NO TRUNCATION
-        fileContexts.push(`📎 FILE: ${fileName}\n${file.extracted_text}\n${'='.repeat(50)}`);
-      }
-    });
-
-    const combinedFileContext = fileContexts.length > 0 
-      ? `UPLOADED FILES CONTEXT:\n\n${fileContexts.join('\n\n')}`
-      : "";
-
-    console.log(`✅ Combined file context: ${combinedFileContext.length} characters from ${fileContexts.length} files`);
-    
-    return { 
-      fileContext: combinedFileContext, 
-      fileNames: fileNames,
-      fileCount: fileContexts.length,
-      contextType: "all_files"
-    };
-
-  } catch (error) {
-    console.error("❌ Error fetching uploaded files context:", error);
-    return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
-  }
-}
-
-
-
-
-
-
-
 // 🚀 OPTIMIZED FAST SUGGESTIONS
 // async function generateFastSuggestions(userMessage) {
 //   try {
@@ -1260,15 +1329,15 @@ async function handleAllBackgroundTasksOptimized(
   conversation_id,
   userMessage,
   aiResponse,
-  extracted_summary,
+  extracted_summary,     // ✅ FIX: Move this parameter
   suggestions,
-  user_id,
+  user_id,              // ✅ FIX: Move this parameter
   shouldRename,
   newConversationName,
   processedUrls = [],
   urlData = [],
   urlContent = "",
-  fileContext = "" 
+  fileContext = ""
 ) {
   try {
     console.log("🔄 Starting optimized background tasks for conversation:", conversation_id, "user:", user_id);
@@ -1298,19 +1367,20 @@ async function handleAllBackgroundTasksOptimized(
     // 🚀 STEP 2: Parallel background operations with timeout
     const backgroundTasks = [
       // ✅ FIXED PARAMETER ORDER FOR saveToDatabase
-      Promise.race([
-        saveToDatabase(
-          conversation_id, 
-          userMessage, 
-          aiResponse, 
-          extracted_summary, 
-          suggestions, 
-          processedUrls, 
-          urlData, 
-          fileContext
-        ),
-        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 5000))
-      ]),
+     Promise.race([
+  saveToDatabase(
+    conversation_id, 
+    userMessage, 
+    aiResponse, 
+    [], // ✅ FIX: Pass empty array for uploadedFiles instead of extracted_summary
+    extracted_summary, // ✅ FIX: Pass extracted_summary in correct position
+    suggestions, 
+    processedUrls, 
+    urlData, 
+    fileContext
+  ),
+  new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 5000))
+]),
 
       // Rename conversation ONLY if needed
       shouldRename
@@ -1351,6 +1421,7 @@ async function saveToDatabase(
   conversation_id,
   userMessage,
   aiResponse,
+  uploadedFiles, // ✅ This might not be an array
   extracted_summary,
   suggestions,
   processedUrls = [],
@@ -1358,72 +1429,24 @@ async function saveToDatabase(
   fileContext = ""
 ) {
   try {
-    // ✅ GET FILE INFORMATION FROM DATABASE FOR THIS CONVERSATION
-    let filePaths = null;
-    let fileNames = null;
-    let fileMetadata = null;
+        // ✅ SIMPLE FIX: Handle uploadedFiles safely
+    const filesArray = Array.isArray(uploadedFiles) ? uploadedFiles : [];
+    const confirmedFiles = filesArray.filter(file => file && file.status !== 'pending_response');
     
-    if (conversation_id) {
-      try {
-        const fileResults = await executeQuery(
-          `SELECT file_path, file_metadata FROM uploaded_files 
-           WHERE conversation_id = ? 
-           ORDER BY created_at ASC`,
-          [conversation_id]
-        );
+    // Prepare file data
+    const filePaths = confirmedFiles.map(f => f?.file_path).filter(Boolean).join(",");
+    const fileNames = confirmedFiles.map(f => f?.file_name || f?.original_filename).filter(Boolean).join(",");
 
-        if (fileResults && fileResults.length > 0) {
-          const paths = [];
-          const names = [];
-          const metadataArray = [];
-
-          fileResults.forEach(file => {
-            if (file.file_path) {
-              paths.push(file.file_path);
-              
-              // Extract filename from metadata or path
-              if (file.file_metadata) {
-                try {
-                  const metadata = JSON.parse(file.file_metadata);
-                  names.push(metadata.original_filename || metadata.display_filename);
-                  metadataArray.push(metadata);
-                } catch (parseError) {
-                  const fileName = file.file_path.split('/').pop();
-                  names.push(fileName);
-                  metadataArray.push({ filename: fileName });
-                }
-              } else {
-                const fileName = file.file_path.split('/').pop();
-                names.push(fileName);
-                metadataArray.push({ filename: fileName });
-              }
-            }
-          });
-
-          if (paths.length > 0) {
-            filePaths = paths.join(',');
-            fileNames = names.join(',');
-            fileMetadata = JSON.stringify(metadataArray);
-          }
-        }
-      } catch (fileError) {
-        console.error("❌ Error fetching file info for chat history:", fileError);
-      }
-    }
-
-    // ✅ SAFE URL DATA PROCESSING - CHECK IF ARRAY FIRST
-    const urlsString = Array.isArray(processedUrls) && processedUrls.length > 0 
-      ? processedUrls.join(",") 
-      : null;
-
-    const urlContentString = Array.isArray(urlData) && urlData.length > 0
+    // Prepare URL data
+    const urlsString = processedUrls.length > 0 ? processedUrls.join(",") : null;
+    const urlContentString = urlData.length > 0
       ? urlData
           .filter((data) => data && data.content && !data.error)
           .map((data) => `[${data.title || 'Untitled'}] ${data.content}`)
           .join("\n---\n")
       : null;
 
-    const urlMetadata = Array.isArray(urlData) && urlData.length > 0
+    const urlMetadata = urlData.length > 0
       ? JSON.stringify(urlData.map((data) => ({
           url: data?.url || '',
           title: data?.title || 'Untitled',
@@ -1433,40 +1456,33 @@ async function saveToDatabase(
         })))
       : null;
 
-    // ✅ COMBINE ALL EXTRACTED TEXT
+    // ✅ COMBINE ONLY CONFIRMED EXTRACTED TEXT
     let allExtractedText = "";
     if (extracted_summary) {
       allExtractedText += `CURRENT UPLOAD:\n${extracted_summary}\n\n`;
     }
     if (fileContext) {
-      allExtractedText += `REFERENCED FILES:\n${fileContext}`;
+      allExtractedText += `PREVIOUS FILES:\n${fileContext}`;
     }
 
-    // ✅ SAVE TO CHAT_HISTORY WITH ALL COLUMNS
-    await executeQuery(
+   await executeQuery(
       `INSERT INTO chat_history 
-       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, file_metadata, suggestions, urls, url_content, url_metadata) 
-       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, suggestions, urls, url_content) 
+       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`,
       [
         conversation_id,
         userMessage,
         aiResponse,
-        filePaths, // ✅ Comma-separated file paths
+        filePaths || null,
         allExtractedText || null,
-        fileNames, // ✅ Comma-separated file names
-        fileMetadata, // ✅ JSON metadata array
-        JSON.stringify(suggestions) || null,
+        fileNames || null,
+         suggestions && suggestions.length > 0 ? JSON.stringify(suggestions) : null, // ✅ FIX: Only save if suggestions exist
         urlsString,
         urlContentString,
-        urlMetadata,
       ]
     );
 
-    console.log("✅ Database save successful with file paths and names:", {
-      filePaths: filePaths ? filePaths.split(',').length : 0,
-      fileNames: fileNames ? fileNames.split(',').length : 0,
-      conversation_id
-    });
+    console.log("✅ Database save successful with confirmed files only");
     return true;
   } catch (error) {
     console.error("❌ Database save error:", error);

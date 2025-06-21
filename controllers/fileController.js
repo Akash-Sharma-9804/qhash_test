@@ -349,8 +349,288 @@ const executeQuery = async (sql, params = []) => {
 //   }
 // };
 
+// exports.uploadFiles = async (req, res) => {
+//   const startTime = Date.now();
+  
+//   try {
+//     const user_id = req.user?.user_id || req.body.user_id;
+//     let { conversation_id } = req.body;
+//     const userMessage = req.body.message?.trim();
+
+//     if (!user_id) {
+//       return res.status(400).json({ error: "Missing user_id. Please login first." });
+//     }
+
+//     // ✅ CREATE CONVERSATION IF NOT PROVIDED
+//     let finalConversationId = conversation_id;
+//     if (!conversation_id) {
+//       try {
+//         const convResult = await executeQuery(
+//           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
+//           [user_id, userMessage?.slice(0, 20) || "File Upload"]
+//         );
+//         finalConversationId = convResult.insertId;
+//         console.log(`✅ Created new conversation: ${finalConversationId}`);
+//       } catch (convError) {
+//         console.error("❌ Failed to create conversation:", convError);
+//         return res.status(500).json({ error: "Failed to create conversation" });
+//       }
+//     }
+
+//     // ✅ BETTER FILE VALIDATION
+//     if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
+//       console.log("⚠️ No files uploaded, but continuing with conversation creation");
+      
+//       return res.status(200).json({
+//         success: true,
+//         conversation_id: finalConversationId,
+//         message: "No files uploaded, but conversation is ready",
+//         files: [],
+//         extracted_summary: "No files were uploaded.",
+//         extracted_summary_raw: "",
+//         summary: {
+//           total: 0,
+//           successful: 0,
+//           failed: 0,
+//           upload_time: "0.00",
+//           total_time: "0.00"
+//         }
+//       });
+//     }
+
+//     console.log(`🚀 Processing ${req.files.length} files for user: ${user_id}, conversation: ${finalConversationId}`);
+
+//     // ✅ VALIDATE FILE DATA BEFORE PROCESSING
+//     const validFiles = req.files.filter(file => file && file.buffer && file.originalname);
+//     if (validFiles.length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "No valid files found",
+//         files: []
+//       });
+//     }
+
+//     // ✅ PREPARE FILE DATA WITH VALIDATION
+//     const fileDataArray = validFiles.map(file => {
+//       try {
+//         return {
+//           buffer: file.buffer,
+//           fileName: sanitizeDisplayName(file.originalname),
+//           originalFilename: file.originalname,
+//           originalFile: file
+//         };
+//       } catch (err) {
+//         console.error(`❌ Error preparing file data for ${file.originalname}:`, err);
+//         return null;
+//       }
+//     }).filter(Boolean); // Remove null entries
+
+//     if (fileDataArray.length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "Failed to prepare file data",
+//         files: []
+//       });
+//     }
+
+//     // 🚀 PARALLEL UPLOAD WITH ERROR HANDLING
+//     const uploadStartTime = Date.now();
+//     let uploadResults = [];
+    
+//     try {
+//       uploadResults = await uploadMultipleToFTP(fileDataArray);
+//       if (!uploadResults || !Array.isArray(uploadResults)) {
+//         throw new Error("Upload function returned invalid results");
+//       }
+//     } catch (uploadError) {
+//       console.error("❌ Upload failed:", uploadError);
+//       return res.status(500).json({
+//         success: false,
+//         error: "File upload failed",
+//         details: uploadError.message,
+//         files: []
+//       });
+//     }
+    
+//     const uploadTime = ((Date.now() - uploadStartTime) / 1000).toFixed(2);
+//     console.log(`⚡ Parallel upload completed in ${uploadTime}s`);
+
+//     // 🧾 PARALLEL TEXT EXTRACTION WITH BETTER ERROR HANDLING
+//     const textExtractionPromises = uploadResults.map(async (uploadResult, index) => {
+//       try {
+//         const originalFile = validFiles[index];
+        
+//         if (!originalFile) {
+//           throw new Error("Original file not found");
+//         }
+        
+//         // ✅ HANDLE UPLOAD SUCCESS
+//         if (uploadResult && uploadResult.success) {
+//           try {
+//             console.log(`📄 Processing: ${uploadResult.originalFilename} | Type: ${originalFile.mimetype}`);
+            
+//             const extractedText = await extractText(
+//               originalFile.buffer, 
+//               originalFile.mimetype, 
+//               uploadResult.filePath,
+//               uploadResult.originalFilename
+//             );
+            
+//             // ✅ SAVE TO DATABASE WITH COMPLETE METADATA
+//             try {
+//               const fullExtractedText = extractedText && extractedText.length > 0 
+//                 ? extractedText 
+//                 : "No readable content extracted";
+
+//               const fileMetadata = {
+//                 original_filename: uploadResult.originalFilename,
+//                 display_filename: sanitizeDisplayName(uploadResult.originalFilename),
+//                 unique_filename: uploadResult.uniqueFilename,
+//                 file_size: originalFile.size,
+//                 mime_type: originalFile.mimetype,
+//                 upload_timestamp: new Date().toISOString(),
+//                 extraction_status: extractedText ? 'success' : 'failed'
+//               };
+
+//               await executeQuery(
+//                 "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id, file_metadata, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
+//                 [user_id, uploadResult.filePath, fullExtractedText, finalConversationId, JSON.stringify(fileMetadata)]
+//               );
+              
+//               console.log(`✅ Saved to database: ${uploadResult.originalFilename}`);
+//             } catch (dbError) {
+//               console.error(`❌ Database save failed for ${uploadResult.originalFilename}:`, dbError);
+//             }
+            
+//             return {
+//               file_name: uploadResult.originalFilename,
+//               original_filename: uploadResult.originalFilename,
+//               display_name: sanitizeDisplayName(uploadResult.originalFilename),
+//               unique_filename: uploadResult.uniqueFilename,
+//               file_path: uploadResult.filePath,
+//               file_type: originalFile.mimetype,
+//               file_size: originalFile.size,
+//               extracted_text: extractedText || "No readable content",
+//               upload_success: true,
+//               database_saved: true,
+//               error: null
+//             };
+            
+//           } catch (extractError) {
+//             console.error(`❌ Text extraction failed for ${uploadResult.originalFilename}:`, extractError);
+            
+//             return {
+//               file_name: uploadResult.originalFilename,
+//               original_filename: uploadResult.originalFilename,
+//               display_name: sanitizeDisplayName(uploadResult.originalFilename),
+//               unique_filename: uploadResult.uniqueFilename,
+//               file_path: uploadResult.filePath,
+//               file_type: originalFile.mimetype,
+//               file_size: originalFile.size,
+//               extracted_text: "Text extraction failed",
+//               upload_success: true,
+//               extraction_error: extractError.message,
+//               database_saved: false,
+//               error: `Text extraction failed: ${extractError.message}`
+//             };
+//           }
+//         } else {
+//           // ✅ HANDLE UPLOAD FAILURE
+//           console.error(`❌ File upload failed: ${uploadResult?.error || 'Unknown error'}`);
+          
+//           return {
+//             file_name: uploadResult?.originalFilename || originalFile.originalname,
+//             original_filename: uploadResult?.originalFilename || originalFile.originalname,
+//             display_name: sanitizeDisplayName(uploadResult?.originalFilename || originalFile.originalname),
+//             unique_filename: null,
+//             file_path: null,
+//             file_type: originalFile.mimetype,
+//             file_size: originalFile.size,
+//             extracted_text: null,
+//             upload_success: false,
+//             database_saved: false,
+//             error: uploadResult?.error || "Upload failed"
+//           };
+//         }
+//       } catch (processingError) {
+//         console.error(`❌ File processing error:`, processingError);
+        
+//         return {
+//           file_name: "Unknown file",
+//           original_filename: "Unknown file",
+//           display_name: "Unknown file",
+//           unique_filename: null,
+//           file_path: null,
+//           file_type: "unknown",
+//           file_size: 0,
+//           extracted_text: null,
+//           upload_success: false,
+//           database_saved: false,
+//           error: `Processing failed: ${processingError.message}`
+//         };
+//       }
+//     });
+
+//     // Wait for all processing to complete
+//     const processedFiles = await Promise.all(textExtractionPromises);
+
+//     const successfulUploads = processedFiles.filter(f => f && f.upload_success);
+//     const failedUploads = processedFiles.filter(f => f && !f.upload_success);
+//     const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
+
+//     console.log(`🎉 Complete processing finished in ${totalTime}s: ${successfulUploads.length} successful, ${failedUploads.length} failed`);
+
+//     // ✅ PREPARE RESPONSE
+//     const allExtractedSummaries = successfulUploads
+//       .filter(file => file.extracted_text && file.extracted_text !== "No readable content" && file.extracted_text !== "Text extraction failed")
+//       .map(file => `📎 ${file.file_name}\n${file.extracted_text}`);
+
+//     const allText = allExtractedSummaries.join("\n\n");
+
+//     const response = {
+//       success: successfulUploads.length > 0,
+//       conversation_id: finalConversationId,
+//       message: failedUploads.length > 0 
+//         ? `Processed ${validFiles.length} files: ${successfulUploads.length} successful, ${failedUploads.length} failed`
+//         : `Successfully processed ${successfulUploads.length} files in ${totalTime}s`,
+//       files: processedFiles,
+//       extracted_summary: allText
+//         ? `Here's what I understood from your files:\n${allText.slice(0, 1000)}${allText.length > 1000 ? "..." : ""}`
+//         : successfulUploads.length > 0 
+//           ? "I received your files, but couldn't extract readable text from them."
+//           : "File upload failed.",
+//       extracted_summary_raw: allText,
+//       summary: {
+//         total: validFiles.length,
+//         successful: successfulUploads.length,
+//         failed: failedUploads.length,
+//         upload_time: uploadTime,
+//         total_time: totalTime
+//       },
+//       errors: failedUploads.length > 0 ? failedUploads.map(f => ({
+//         file_name: f.file_name,
+//         error: f.error
+//       })) : null
+//     };
+
+//     return res.status(failedUploads.length === validFiles.length ? 400 : 201).json(response);
+
+//   } catch (error) {
+//     console.error("❌ File upload controller error:", error);
+//     res.status(500).json({ 
+//       success: false,
+//       error: "File processing failed", 
+//       details: error.message,
+//       files: []
+//     });
+//   }
+// };
+
+
+
 exports.uploadFiles = async (req, res) => {
   const startTime = Date.now();
+  let uploadedFileIds = []; // ✅ Track uploaded file IDs for rollback
   
   try {
     const user_id = req.user?.user_id || req.body.user_id;
@@ -367,17 +647,17 @@ exports.uploadFiles = async (req, res) => {
       try {
         const convResult = await executeQuery(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-          [user_id, userMessage?.slice(0, 20) || "File Upload"]
+          [user_id, userMessage?.slice(0, 20) || "New Conversation"]
         );
         finalConversationId = convResult.insertId;
-        console.log(`✅ Created new conversation: ${finalConversationId}`);
+        console.log(`✅ Created new conversation without files: ${finalConversationId}`);
       } catch (convError) {
         console.error("❌ Failed to create conversation:", convError);
         return res.status(500).json({ error: "Failed to create conversation" });
       }
     }
 
-    // ✅ BETTER FILE VALIDATION
+    // ✅ HANDLE CASE WHERE NO FILES ARE UPLOADED
     if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
       console.log("⚠️ No files uploaded, but continuing with conversation creation");
       
@@ -397,8 +677,6 @@ exports.uploadFiles = async (req, res) => {
         }
       });
     }
-
-    console.log(`🚀 Processing ${req.files.length} files for user: ${user_id}, conversation: ${finalConversationId}`);
 
     // ✅ VALIDATE FILE DATA BEFORE PROCESSING
     const validFiles = req.files.filter(file => file && file.buffer && file.originalname);
@@ -423,7 +701,7 @@ exports.uploadFiles = async (req, res) => {
         console.error(`❌ Error preparing file data for ${file.originalname}:`, err);
         return null;
       }
-    }).filter(Boolean); // Remove null entries
+    }).filter(Boolean);
 
     if (fileDataArray.length === 0) {
       return res.status(400).json({
@@ -456,7 +734,9 @@ exports.uploadFiles = async (req, res) => {
     console.log(`⚡ Parallel upload completed in ${uploadTime}s`);
 
     // 🧾 PARALLEL TEXT EXTRACTION WITH BETTER ERROR HANDLING
-    const textExtractionPromises = uploadResults.map(async (uploadResult, index) => {
+     const textExtractionPromises = uploadResults.map(async (uploadResult, index) => {
+      let dbResult = null; // ✅ DECLARE AT TOP LEVEL
+      
       try {
         const originalFile = validFiles[index];
         
@@ -476,68 +756,72 @@ exports.uploadFiles = async (req, res) => {
               uploadResult.originalFilename
             );
             
-            // ✅ SAVE TO DATABASE WITH COMPLETE METADATA
-            try {
-              const fullExtractedText = extractedText && extractedText.length > 0 
-                ? extractedText 
-                : "No readable content extracted";
+            // ✅ SAVE TO DATABASE WITH PENDING STATUS
+            const fullExtractedText = extractedText && extractedText.length > 0 
+              ? extractedText 
+              : "No readable content extracted";
 
-              const fileMetadata = {
-                original_filename: uploadResult.originalFilename,
-                display_filename: sanitizeDisplayName(uploadResult.originalFilename),
-                unique_filename: uploadResult.uniqueFilename,
-                file_size: originalFile.size,
-                mime_type: originalFile.mimetype,
-                upload_timestamp: new Date().toISOString(),
-                extraction_status: extractedText ? 'success' : 'failed'
-              };
-
-              await executeQuery(
-                "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id, file_metadata, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
-                [user_id, uploadResult.filePath, fullExtractedText, finalConversationId, JSON.stringify(fileMetadata)]
-              );
-              
-              console.log(`✅ Saved to database: ${uploadResult.originalFilename}`);
-            } catch (dbError) {
-              console.error(`❌ Database save failed for ${uploadResult.originalFilename}:`, dbError);
-            }
-            
-            return {
-              file_name: uploadResult.originalFilename,
+            const fileMetadata = {
               original_filename: uploadResult.originalFilename,
-              display_name: sanitizeDisplayName(uploadResult.originalFilename),
+              display_filename: sanitizeDisplayName(uploadResult.originalFilename),
               unique_filename: uploadResult.uniqueFilename,
-              file_path: uploadResult.filePath,
-              file_type: originalFile.mimetype,
               file_size: originalFile.size,
-              extracted_text: extractedText || "No readable content",
-              upload_success: true,
-              database_saved: true,
-              error: null
+              mime_type: originalFile.mimetype,
+              upload_timestamp: new Date().toISOString(),
+              extraction_status: extractedText ? 'success' : 'failed',
+              status: 'pending_response'
             };
+
+            dbResult = await executeQuery(
+              "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id, file_metadata, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending_response', NOW())",
+              [user_id, uploadResult.filePath, fullExtractedText, finalConversationId, JSON.stringify(fileMetadata)]
+            );
+            
+            // ✅ TRACK FILE ID FOR POTENTIAL ROLLBACK
+            uploadedFileIds.push(dbResult.insertId);
+            
+            console.log(`✅ Saved to database with pending status: ${uploadResult.originalFilename}`);
             
           } catch (extractError) {
             console.error(`❌ Text extraction failed for ${uploadResult.originalFilename}:`, extractError);
             
-            return {
-              file_name: uploadResult.originalFilename,
+            // ✅ SAVE TO DATABASE EVEN IF EXTRACTION FAILS
+            const fileMetadata = {
               original_filename: uploadResult.originalFilename,
-              display_name: sanitizeDisplayName(uploadResult.originalFilename),
+              display_filename: sanitizeDisplayName(uploadResult.originalFilename),
               unique_filename: uploadResult.uniqueFilename,
-              file_path: uploadResult.filePath,
-              file_type: originalFile.mimetype,
               file_size: originalFile.size,
-              extracted_text: "Text extraction failed",
-              upload_success: true,
-              extraction_error: extractError.message,
-              database_saved: false,
-              error: `Text extraction failed: ${extractError.message}`
+              mime_type: originalFile.mimetype,
+              upload_timestamp: new Date().toISOString(),
+              extraction_status: 'failed',
+              extraction_error: extractError.message
             };
+
+            dbResult = await executeQuery(
+              "INSERT INTO uploaded_files (user_id, file_path, extracted_text, conversation_id, file_metadata, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending_response', NOW())",
+              [user_id, uploadResult.filePath, "Text extraction failed", finalConversationId, JSON.stringify(fileMetadata)]
+            );
+            
+            uploadedFileIds.push(dbResult.insertId);
+            console.log(`✅ Saved to database (extraction failed): ${uploadResult.originalFilename}`);
           }
-        } else {
-          // ✅ HANDLE UPLOAD FAILURE
-          console.error(`❌ File upload failed: ${uploadResult?.error || 'Unknown error'}`);
           
+          return {
+            file_id: dbResult?.insertId || null,
+            file_name: uploadResult.originalFilename,
+            original_filename: uploadResult.originalFilename,
+            display_name: sanitizeDisplayName(uploadResult.originalFilename),
+            unique_filename: uploadResult.uniqueFilename,
+            file_path: uploadResult.filePath,
+            file_type: originalFile.mimetype,
+            file_size: originalFile.size,
+            extracted_text: dbResult ? "Success" : "Text extraction failed",
+            upload_success: true,
+            database_saved: true,
+            error: null
+          };
+          
+        } else {
           return {
             file_name: uploadResult?.originalFilename || originalFile.originalname,
             original_filename: uploadResult?.originalFilename || originalFile.originalname,
@@ -580,7 +864,7 @@ exports.uploadFiles = async (req, res) => {
 
     console.log(`🎉 Complete processing finished in ${totalTime}s: ${successfulUploads.length} successful, ${failedUploads.length} failed`);
 
-    // ✅ PREPARE RESPONSE
+    // ✅ PREPARE RESPONSE WITH ROLLBACK INFO
     const allExtractedSummaries = successfulUploads
       .filter(file => file.extracted_text && file.extracted_text !== "No readable content" && file.extracted_text !== "Text extraction failed")
       .map(file => `📎 ${file.file_name}\n${file.extracted_text}`);
@@ -610,13 +894,35 @@ exports.uploadFiles = async (req, res) => {
       errors: failedUploads.length > 0 ? failedUploads.map(f => ({
         file_name: f.file_name,
         error: f.error
-      })) : null
+      })) : null,
+      // ✅ ADD ROLLBACK INFO FOR CHAT CONTROLLER
+      _internal: {
+        uploaded_file_ids: uploadedFileIds.filter(id => id !== null && id !== undefined), // ✅ Filter out null/undefined IDs
+        needs_confirmation: successfulUploads.length > 0
+      }
     };
 
     return res.status(failedUploads.length === validFiles.length ? 400 : 201).json(response);
 
   } catch (error) {
     console.error("❌ File upload controller error:", error);
+    
+    // ✅ ROLLBACK ON CRITICAL ERROR
+    if (uploadedFileIds.length > 0) {
+      try {
+        const validIds = uploadedFileIds.filter(id => id !== null && id !== undefined);
+        if (validIds.length > 0) {
+          await executeQuery(
+            `DELETE FROM uploaded_files WHERE id IN (${validIds.map(() => '?').join(',')})`,
+            validIds
+          );
+          console.log(`🔄 Rolled back ${validIds.length} files due to critical error`);
+        }
+      } catch (rollbackError) {
+        console.error("❌ Rollback failed:", rollbackError);
+      }
+    }
+    
     res.status(500).json({ 
       success: false,
       error: "File processing failed", 
@@ -625,7 +931,3 @@ exports.uploadFiles = async (req, res) => {
     });
   }
 };
-
-
-
-
