@@ -1,7 +1,7 @@
 const { createClient } = require("@deepgram/sdk");
 const { v4: uuidv4 } = require("uuid");
 const multer = require("multer");
-const uploadToFTP = require("../utils/ftpUploader");
+const { uploadToFTP } = require("../utils/ftpUploader");
 const db = require("../config/db");
 const openai = require("../config/openai");
 const deepseek = require("../config/deepseek");
