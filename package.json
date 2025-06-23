@@ -29,6 +29,7 @@
     "file-type": "^20.4.1",
     "fs": "^0.0.1-security",
     "jsonwebtoken": "^9.0.2",
+    "llama-tokenizer-js": "^1.2.2",
     "mammoth": "^1.9.0",
     "multer": "^1.4.5-lts.2",
     "mysql": "^2.18.1",
@@ -48,6 +49,7 @@
     "sharp": "^0.34.1",
     "tesseract.js": "^6.0.1",
     "tmp-promise": "^3.0.3",
+    "together-ai": "^0.16.0",
     "url-parse": "^1.5.10",
     "uuid": "^11.1.0",
     "xlsx": "^0.18.5"
