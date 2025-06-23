@@ -22,7 +22,7 @@ const fileRoutes = require("./routes/fileRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const voiceRoutes = require("./routes/voiceRoutes");
 const middleware = require("./middleware/authMiddleware");
-const { handleLiveVoiceMessage } = require("./controllers/voiceController");
+const { handleLiveVoiceMessage, handleDictateMode } = require("./controllers/voiceController");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -122,7 +122,8 @@ const conversationIdRaw = url.searchParams.get("conversation_id");
 const conversationId = conversationIdRaw ? parseInt(conversationIdRaw, 10) : null;
 
 console.log(`🎯 Received conversationId: ${conversationId}`);
-
+  // 👈 NEW: Check for dictate mode
+    const mode = url.searchParams.get("mode");
 
     if (!userId) {
       console.error("❌ Invalid token, closing connection");
@@ -142,6 +143,11 @@ console.log(`🎯 Received conversationId: ${conversationId}`);
       userId: userId
     }));
 
+     // 👈 NEW: Route to dictate mode if requested
+    if (mode === "dictate") {
+      console.log("🎤 [Mode] Routing to dictate mode");
+      return handleDictateMode(ws, userId);
+    }
     // Proceed with handling the voice stream if the token is valid
     await handleLiveVoiceMessage(ws, userId, conversationId);
 

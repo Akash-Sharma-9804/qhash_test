@@ -94,6 +94,135 @@ const handleFinalUpload = (req, res) => {
   });
 };
 
+const handleDictateMode = (ws, userId) => {
+  console.log(`🎤 [Dictate Mode] Starting for user: ${userId}`);
+
+  // 👈 FIXED: Use exact same URL as working handleLiveVoiceMessage
+  const deepgramSocket = new WebSocket(
+    "wss://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true&vad_events=true&interim_results=true&encoding=linear16&sample_rate=16000",
+    {
+      headers: {
+        Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
+      },
+    }
+  );
+
+  let isDGReady = false;
+  const audioQueue = [];
+  let audioChunkCount = 0;
+  let transcriptCount = 0;
+
+  deepgramSocket.on("open", () => {
+    console.log("✅ [Dictate] Deepgram WebSocket connection opened successfully");
+    isDGReady = true;
+    
+    console.log(`📦 [Dictate] Processing ${audioQueue.length} queued audio chunks`);
+    while (audioQueue.length > 0) {
+      const chunk = audioQueue.shift();
+      deepgramSocket.send(chunk);
+      console.log(`🔊 [Dictate] Sent queued audio chunk: ${chunk.length} bytes`);
+    }
+
+    ws.send(JSON.stringify({ 
+      type: "dictate-ready"
+    }));
+    console.log("📤 [Dictate] Sent 'dictate-ready' to frontend");
+  });
+
+  deepgramSocket.on("message", (msg) => {
+    try {
+      console.log(`📨 [Dictate] Raw message received from Deepgram: ${msg.toString().substring(0, 200)}...`);
+      
+      const data = JSON.parse(msg.toString());
+      const transcript = data.channel?.alternatives?.[0]?.transcript;
+      const confidence = data.channel?.alternatives?.[0]?.confidence;
+      const isFinal = data.is_final;
+
+      console.log(`📝 [Dictate] Transcript details:`, {
+        transcript: transcript,
+        confidence: confidence,
+        is_final: isFinal,
+        has_transcript: !!transcript,
+        transcript_length: transcript?.length || 0
+      });
+
+      if (transcript && transcript.trim() !== "") {
+        transcriptCount++;
+        console.log(`🎯 [Dictate #${transcriptCount}] Valid transcript found: "${transcript}"`);
+        
+        const responseData = { 
+          type: "dictate-transcript", 
+          text: transcript,
+          is_final: isFinal || false,
+          confidence: confidence || 0
+        };
+        
+        ws.send(JSON.stringify(responseData));
+        console.log(`📤 [Dictate] Sent transcript to frontend:`, responseData);
+      } else {
+        console.log(`⚠️ [Dictate] Empty transcript - audio might be silent or encoding mismatch`);
+      }
+    } catch (err) {
+      console.error("❌ [Dictate] Error parsing Deepgram message:", err);
+    }
+  });
+
+  deepgramSocket.on("error", (err) => {
+    console.error("❌ [Dictate] Deepgram WebSocket error:", err);
+    ws.send(JSON.stringify({ type: "error", error: "Dictate error" }));
+  });
+
+  deepgramSocket.on("close", (code, reason) => {
+    console.log(`🔌 [Dictate] Deepgram WebSocket closed. Code: ${code}, Reason: ${reason}`);
+  });
+
+  const handleDictateMessage = (data) => {
+    try {
+      if (!Buffer.isBuffer(data)) {
+        const parsed = JSON.parse(data.toString());
+        if (parsed.type === "stop-dictate") {
+          console.log("🛑 [Dictate] Stop dictate command received");
+          deepgramSocket.close();
+          ws.removeListener('message', handleDictateMessage);
+          ws.send(JSON.stringify({ type: "dictate-stopped" }));
+          return;
+        }
+      }
+    } catch (err) {
+      // Expected for audio data
+    }
+
+    if (Buffer.isBuffer(data)) {
+      audioChunkCount++;
+      console.log(`🔊 [Dictate Audio #${audioChunkCount}] Received audio chunk: ${data.length} bytes`);
+      
+      if (isDGReady && deepgramSocket.readyState === WebSocket.OPEN) {
+        deepgramSocket.send(data);
+        console.log(`📤 [Dictate] Sent audio chunk to Deepgram: ${data.length} bytes`);
+      } else {
+        audioQueue.push(data);
+        console.log(`📦 [Dictate] Queued audio chunk: ${data.length} bytes`);
+      }
+    }
+  };
+
+  ws.on('message', handleDictateMessage);
+
+  ws.on("close", () => {
+    console.log(`🔌 [Dictate] Client WebSocket closed for user: ${userId}`);
+    console.log(`📊 [Dictate] Session stats - Audio chunks: ${audioChunkCount}, Transcripts: ${transcriptCount}`);
+    
+    if (deepgramSocket.readyState === WebSocket.OPEN) {
+      deepgramSocket.close();
+    }
+    ws.removeListener('message', handleDictateMessage);
+  });
+};
+
+
+
+
+
 // const handleLiveVoiceMessage = (ws, userId) => {
 //   console.log(`🎤 [Voice] Starting live session for user: ${userId}`);
 
@@ -1520,5 +1649,6 @@ module.exports = {
   handleLiveVoiceMessage,
   fetchDeepseekAI,
   fetchDeepseekAIWithTTS,
+  handleDictateMode,
 };
 
