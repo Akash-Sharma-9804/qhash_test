@@ -773,7 +773,7 @@ try {
     // Use Llama - handle failure explicitly
     stream = await llama.chat.completions.create({
       messages: finalMessages,
-      temperature: 0.2,
+      temperature: 0.7,
       max_tokens: 2000,
       stream: true,
     });
@@ -1188,9 +1188,7 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 }
 
   
-// ✅ UPDATE: Only get confirmed files for context
-// ✅ SMART: Full context with intelligent token management
-// ✅ SMART: Full context with intelligent prioritization (no truncation)
+// ✅ ALWAYS FULL CONTEXT: No truncation, no token limits for files
 async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage) {
   if (!conversation_id || isNaN(conversation_id)) {
     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "none" };
@@ -1202,7 +1200,7 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
 
     console.log(`📄 New upload: ${hasNewUpload}, Asking about files: ${isAskingAboutFiles}`);
 
-    // Get ALL files
+    // Get ALL files - no status filtering
     const allFiles = await executeQuery(
       `SELECT file_path, extracted_text, file_metadata, created_at, status
        FROM uploaded_files 
@@ -1216,7 +1214,7 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
     const fileNames = [];
     const validFiles = [];
 
-    // Process all files
+    // Process ALL files and get their COMPLETE content
     if (allFiles && allFiles.length > 0) {
       allFiles.forEach((file, index) => {
         let fileName = "Unknown File";
@@ -1230,184 +1228,109 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
         }
         fileNames.push(fileName);
 
-        // Include files with valid content
+        // ✅ INCLUDE ALL FILES WITH ANY VALID CONTENT
         if (file.extracted_text && 
             file.extracted_text !== "No readable content extracted" && 
             file.extracted_text !== "Text extraction failed" &&
             file.extracted_text !== "[Error extracting text]" &&
-            file.extracted_text !== "Success" &&
+            file.extracted_text !== "Success" && 
             file.extracted_text.trim().length > 10) {
           
           validFiles.push({ 
             ...file, 
             fileName,
             isNew: file.status === 'pending_response',
-            tokenEstimate: Math.ceil(file.extracted_text.length / 4) // Rough token estimate
+            contentLength: file.extracted_text.length
           });
+          
+          console.log(`✅ Including file: ${fileName} (${file.extracted_text.length} chars)`);
+        } else {
+          console.log(`❌ Skipping file with no content: ${fileName}`);
         }
       });
     }
 
-    // ✅ SMART PRIORITIZATION LOGIC
-    if (hasNewUpload || isAskingAboutFiles) {
-      const selectedFiles = smartFileSelection(validFiles, userMessage, hasNewUpload, extracted_summary);
-      
-      let fullContext = "";
-      
-      // Add new upload content first (highest priority)
-      if (hasNewUpload && extracted_summary !== "Success") {
-        fullContext += `📎 NEWLY UPLOADED FILES:\n${extracted_summary}\n`;
+    // ✅ ALWAYS PROVIDE FULL CONTEXT - No conditions, no limits
+    let fullContext = "";
+    
+    // Add new upload content first
+    if (hasNewUpload && extracted_summary !== "Success") {
+      fullContext += `📎 NEWLY UPLOADED FILES:\n${extracted_summary}\n`;
+      console.log(`📄 New upload context: ${extracted_summary.length} characters`);
+    }
+    
+    // ✅ ADD ALL EXISTING FILES - COMPLETE CONTENT, NO TRUNCATION
+    if (validFiles.length > 0) {
+      const fileContexts = validFiles.map(file => {
+        const statusInfo = file.isNew ? ' [JUST UPLOADED]' : '';
+        console.log(`📄 Adding FULL content for: ${file.fileName} (${file.contentLength} chars)`);
+        return `📎 FILE: ${file.fileName}${statusInfo}\n${file.extracted_text}`;
+      });
+
+      if (fileContexts.length > 0) {
+        const separator = fullContext ? `\n${'='.repeat(60)}\n\nALL FILES IN CONVERSATION:\n\n` : `ALL FILES IN CONVERSATION:\n\n`;
+        fullContext += separator + fileContexts.join('\n\n' + '='.repeat(50) + '\n\n');
       }
-      
-      // Add selected existing files
-      if (selectedFiles.length > 0) {
-        const fileContexts = selectedFiles.map(file => {
-          const statusInfo = file.isNew ? ' [JUST UPLOADED]' : '';
-          return `📎 FILE: ${file.fileName}${statusInfo}\n${file.extracted_text}`;
-        });
-
-        if (fileContexts.length > 0) {
-          const separator = fullContext ? `\n${'='.repeat(60)}\n\nRELEVANT FILES:\n\n` : `RELEVANT FILES:\n\n`;
-          fullContext += separator + fileContexts.join('\n\n' + '='.repeat(50) + '\n\n');
-        }
-      }
-
-      // Add summary of other files if any were excluded
-      const excludedFiles = validFiles.filter(f => !selectedFiles.includes(f));
-      if (excludedFiles.length > 0) {
-        const excludedNames = excludedFiles.map(f => f.fileName).join(", ");
-        fullContext += `\n\n📋 OTHER FILES AVAILABLE: ${excludedNames}\n(Ask specifically about any of these for detailed analysis)`;
-      }
-
-      const totalTokens = Math.ceil(fullContext.length / 4);
-      console.log(`📄 Smart context: ${selectedFiles.length}/${validFiles.length} files, ~${totalTokens} tokens`);
-
-      return {
-        fileContext: fullContext,
-        fileNames: fileNames,
-        fileCount: selectedFiles.length,
-        contextType: hasNewUpload ? "new_upload_smart" : "smart_selection",
-        totalFiles: validFiles.length,
-        excludedFiles: excludedFiles.length
-      };
     }
 
-    // Regular chat - minimal context
-    const minimalContext = fileNames.length > 0 
-      ? `Files available: ${fileNames.join(", ")}\n(Ask me about any file for detailed analysis!)`
-      : "";
+    const totalChars = fullContext.length;
+    const estimatedTokens = Math.ceil(totalChars / 4);
+    
+    console.log(`📄 COMPLETE FILE CONTEXT PROVIDED:`);
+    console.log(`   - Files: ${validFiles.length}`);
+    console.log(`   - Total Characters: ${totalChars.toLocaleString()}`);
+    console.log(`   - Estimated Tokens: ${estimatedTokens.toLocaleString()}`);
+    console.log(`   - No Truncation: ✅ All content included`);
 
-    return { 
-      fileContext: minimalContext, 
+    return {
+      fileContext: fullContext,
       fileNames: fileNames,
-      fileCount: fileNames.length,
-      contextType: "minimal"
+      fileCount: validFiles.length,
+      contextType: "always_full_context",
+      totalTokens: estimatedTokens,
+      totalChars: totalChars,
+      noTruncation: true
     };
 
   } catch (error) {
-    console.error("❌ Error getting smart file context:", error);
+    console.error("❌ Error getting full file context:", error);
     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
   }
 }
 
-// ✅ SMART FILE SELECTION: Choose files intelligently based on context and tokens
-function smartFileSelection(validFiles, userMessage, hasNewUpload, extracted_summary) {
-  if (validFiles.length === 0) return [];
+// ✅ REMOVE ALL TOKEN LIMITS AND SMART SELECTION - Not needed anymore
+// function smartFileSelection() - DELETED
+// function selectRelevantFiles() - DELETED
 
-  const MAX_CONTEXT_TOKENS = 12000; // Safe limit for file content
-  let currentTokens = 0;
-  const selectedFiles = [];
-
-  // Add token estimate for new upload
-  if (hasNewUpload && extracted_summary) {
-    currentTokens += Math.ceil(extracted_summary.length / 4);
-  }
-
-  // ✅ PRIORITY 1: New uploads (always include)
-  const newFiles = validFiles.filter(f => f.isNew);
-  newFiles.forEach(file => {
-    if (currentTokens + file.tokenEstimate <= MAX_CONTEXT_TOKENS) {
-      selectedFiles.push(file);
-      currentTokens += file.tokenEstimate;
-    }
-  });
-
-  // ✅ PRIORITY 2: Specifically mentioned files
-  const message = userMessage.toLowerCase();
-  const mentionedFiles = validFiles.filter(file => 
-    !file.isNew && // Don't double-add new files
-    (message.includes(file.fileName.toLowerCase()) ||
-     message.includes(file.fileName.toLowerCase().replace(/\.[^/.]+$/, "")))
-  );
-
-  mentionedFiles.forEach(file => {
-    if (currentTokens + file.tokenEstimate <= MAX_CONTEXT_TOKENS && !selectedFiles.includes(file)) {
-      selectedFiles.push(file);
-      currentTokens += file.tokenEstimate;
-    }
-  });
-
-  // ✅ PRIORITY 3: Handle special requests
-  if (message.includes('all files') || message.includes('every file') || message.includes('each file')) {
-    // User wants all files - add as many as tokens allow, prioritizing smaller files first
-    const remainingFiles = validFiles
-      .filter(f => !selectedFiles.includes(f))
-      .sort((a, b) => a.tokenEstimate - b.tokenEstimate); // Smaller files first
-
-    remainingFiles.forEach(file => {
-      if (currentTokens + file.tokenEstimate <= MAX_CONTEXT_TOKENS) {
-        selectedFiles.push(file);
-        currentTokens += file.tokenEstimate;
-      }
-    });
-  } else {
-    // ✅ PRIORITY 4: Most recent files (if space allows)
-    const recentFiles = validFiles
-      .filter(f => !selectedFiles.includes(f))
-      .slice(0, 2); // Max 2 additional recent files
-
-    recentFiles.forEach(file => {
-      if (currentTokens + file.tokenEstimate <= MAX_CONTEXT_TOKENS) {
-        selectedFiles.push(file);
-        currentTokens += file.tokenEstimate;
-      }
-    });
-  }
-
-  console.log(`🎯 Smart selection: ${selectedFiles.length} files, ~${currentTokens} tokens`);
-  return selectedFiles;
-}
-
-// ✅ ENHANCED: Better file question detection
+// ✅ ALWAYS DETECT FILE QUESTIONS - More comprehensive
 function checkIfAskingAboutFiles(userMessage) {
-  if (!userMessage) return false;
+  // ✅ ALWAYS return true if there are files - AI should always have context
+  return true; // Simple: always provide file context if files exist
+  
+  // Alternative: Keep detection but make it more inclusive
+  /*
+  if (!userMessage) return true; // Default to providing context
   
   const message = userMessage.toLowerCase();
   const fileKeywords = [
-    // Direct file references
-    'file', 'document', 'pdf', 'uploaded', 'attachment', 'doc',
-    // Analysis requests  
+    'file', 'document', 'pdf', 'uploaded', 'attachment', 'doc', 'content',
     'analyze', 'summarize', 'review', 'read', 'explain', 'extract', 'detail',
-    // Content queries
-    'what does', 'what is in', 'content', 'tell me about', 'show me', 'what are in',
-    // Listing requests
-    'names', 'list', 'each', 'every', 'all', 'details', 'mention',
-    // Comparison requests
-    'compare', 'difference', 'similar', 'both files', 'these files',
-    // Reference phrases
-    'according to', 'based on', 'from the document', 'in the file'
+    'what', 'tell', 'show', 'list', 'name', 'mention', 'describe',
+    'compare', 'difference', 'similar', 'both', 'all', 'each', 'every'
   ];
 
   return fileKeywords.some(keyword => message.includes(keyword));
+  */
 }
 
 
- 
 
  
 
+ 
 
-// ✅ UPDATED BUILD AI MESSAGES WITH SMART CONTEXT
+
+// ✅ UPDATED: Handle large file context without limits
 function buildAIMessagesWithSmartContext(summaryContext, extracted_summary, userMessage, userInfo = null, fileNames = [], fileContext = "", contextType = "none") {
   const currentDate = new Date().toLocaleDateString("en-US", {
     year: "numeric",
@@ -1419,19 +1342,6 @@ function buildAIMessagesWithSmartContext(summaryContext, extracted_summary, user
   let userContext = "";
   if (userInfo && userInfo.username) {
     userContext = `The user's name is ${userInfo.username}. When greeting or addressing the user, you can use their name for a more personalized experience.`;
-  }
-
-  // ✅ CONTEXT-AWARE SYSTEM PROMPT
-  let contextInstructions = "";
-  switch (contextType) {
-    case "current_upload":
-      contextInstructions = "\n\nIMPORTANT: The user has just uploaded new files. Focus your response on analyzing and discussing these newly uploaded files unless they specifically ask about previous files in the conversation.";
-      break;
-    case "minimal_reference":
-      contextInstructions = "\n\nNote: There are files available in this conversation, but the user hasn't uploaded new files or asked about existing ones. Focus on their current question. Only reference files if directly relevant to their query.";
-      break;
-    default:
-      contextInstructions = "";
   }
 
   const systemPrompt = {
@@ -1447,7 +1357,9 @@ Developer: "I was developed by the QuantumHash development team."
 
 You can analyze content from URLs and documents. When referencing external content, cite your sources.
 
-Be helpful, accurate, professional, and use all available context to provide the best possible response.${contextInstructions}`,
+You have access to the complete content of all uploaded files. Use this information to provide detailed, accurate responses about the files.
+
+Be helpful, accurate, professional, and use all available context to provide the best possible response.`,
   };
 
   const finalMessages = [systemPrompt];
@@ -1460,37 +1372,39 @@ Be helpful, accurate, professional, and use all available context to provide the
     });
   }
 
-  // ✅ ADD FILE CONTEXT BASED ON TYPE
+  // ✅ ADD COMPLETE FILE CONTEXT - NO LIMITS
   if (fileContext && fileContext.length > 0) {
     finalMessages.push({
       role: "system",
-      content: fileContext,
+      content: `COMPLETE FILE CONTENT:\n${fileContext}`,
     });
-    console.log(`📄 Added ${contextType} file context: ${fileContext.length} characters`);
+    console.log(`📄 Added COMPLETE file context: ${fileContext.length.toLocaleString()} characters`);
   }
 
   // Add current document context if available (new upload)
-  if (extracted_summary && extracted_summary !== "No readable content") {
+  if (extracted_summary && extracted_summary !== "Success" && extracted_summary !== "No readable content") {
     finalMessages.push({
       role: "system",
-      content: `NEW DOCUMENT UPLOADED:\n${extracted_summary}`,
+      content: `ADDITIONAL NEW DOCUMENT:\n${extracted_summary}`,
     });
   }
 
-  // ✅ PREPARE USER MESSAGE
-  let fullUserMessage = userMessage || "";
-  
-  // Add file reference based on context type
-  if (contextType === "current_upload" && Array.isArray(fileNames) && fileNames.length > 0) {
-    fullUserMessage += `\n[Just uploaded: ${fileNames.join(", ")}]`;
-  } else if (contextType === "minimal_reference" && Array.isArray(fileNames) && fileNames.length > 0) {
-    fullUserMessage += `\n[Available files: ${fileNames.join(", ")}]`;
-  }
+  // Add user message
+  finalMessages.push({ role: "user", content: userMessage || "" });
 
-  finalMessages.push({ role: "user", content: fullUserMessage });
+  // ✅ LOG TOTAL CONTEXT SIZE
+  const totalContextLength = finalMessages.reduce((total, msg) => total + msg.content.length, 0);
+  const estimatedTokens = Math.ceil(totalContextLength / 4);
+  
+  console.log(`🧠 AI Context Summary:`);
+  console.log(`   - Total Messages: ${finalMessages.length}`);
+  console.log(`   - Total Characters: ${totalContextLength.toLocaleString()}`);
+  console.log(`   - Estimated Tokens: ${estimatedTokens.toLocaleString()}`);
+  console.log(`   - File Context: ${fileContext ? 'FULL CONTENT' : 'None'}`);
 
   return finalMessages;
 }
+
 
 
 
