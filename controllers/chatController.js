@@ -612,9 +612,10 @@ const fileContextPromise = getFileContextBasedOnUpload(conversation_id, user_id,
     const suggestionPromise = generateFastSuggestions(userMessage);
 
     // ⚡ Get context immediately
-    const [contextResult, fileContextResult] = await Promise.all([
+    const [contextResult, fileContextResult, urlResult] = await Promise.all([
       contextPromise,
-      fileContextPromise
+      fileContextPromise,
+      urlProcessingPromise // ✅ Wait for URL processing
     ]);
 
     const { summaryContext, shouldRename, newConversationName } = contextResult;
@@ -625,6 +626,19 @@ const fileContextPromise = getFileContextBasedOnUpload(conversation_id, user_id,
       contextType = "none" 
     } = fileContextResult || {};
 
+    console.log("🔍 DEBUG - fileContextResult type:", typeof fileContextResult);
+console.log("🔍 DEBUG - fileContext type:", typeof fileContext);
+// console.log("🔍 DEBUG - fileContext value:", fileContext);
+
+// Wait for remaining tasks to complete
+  const [ suggestions] = await Promise.all([
+   
+    suggestionPromise,
+  ]);
+// After getting file context, add this debug:
+console.log("🔍 DEBUG - fileContextResult:", JSON.stringify(fileContextResult, null, 2));
+
+  const { urlData, urlContent, processedUrls, fullUserMessage } = urlResult;
     console.log(`📄 File context: ${fileCount} files, ${fileContext.length} characters, type: ${contextType}`);
     console.log(`📄 File names:`, fileNames);
 
@@ -725,14 +739,22 @@ try {
 
 // 🧠 BUILD AI MESSAGES EFFICIENTLY WITH USER CONTEXT
  const finalMessages = buildAIMessagesWithSmartContext(
-      summaryContext, 
-      extracted_summary, 
-      userMessage, 
-      userInfo, 
-      fileNames,
-      fileContext,
-      contextType
-    );
+  summaryContext, 
+  extracted_summary, 
+  fullUserMessage,  // This becomes userMessage in the function
+  userInfo,         // userInfo 
+  fileNames,        // fileNames
+  fileContext,      // fileContext
+  contextType,      // contextType
+  urlContent        // urlContent
+);
+console.log("🔍 FINAL DEBUG - Messages being sent to AI:");
+finalMessages.forEach((msg, index) => {
+  console.log(`Message ${index}: ${msg.role} - ${msg.content.length} chars`);
+  if (msg.content.includes("COMPLETE FILE CONTENT")) {
+    console.log(`File content preview: ${msg.content.substring(0, 500)}`);
+  }
+});
 
     // 🚀 START AI RESPONSE STREAM IMMEDIATELY (Don't wait for URLs)
     // let aiResponse = "";
@@ -765,7 +787,7 @@ try {
     stream = await deepseek.chat.completions.create({
       model: "deepseek-chat",
       messages: finalMessages,
-      temperature: 0.2,
+      temperature: 0.5,
       max_tokens: 2000,
       stream: true,
     });
@@ -850,13 +872,7 @@ for await (const chunk of stream) {
 }
 
 
-  // Wait for remaining tasks to complete
-  const [urlResult, suggestions] = await Promise.all([
-    urlProcessingPromise,
-    suggestionPromise,
-  ]);
-
-  const { urlData, urlContent, processedUrls, fullUserMessage } = urlResult;
+  
 
   // 🚀 HANDLE RENAME RESULT
   let finalConversationName = newConversationName;
@@ -893,11 +909,13 @@ for await (const chunk of stream) {
     suggestions: suggestions,
     full_response: aiResponse,
     processed_urls: urlData.map((data) => ({
-      url: data.url,
-      title: data.title,
-      success: !data.error,
-      error: data.error,
-    })),
+  url: data.url,
+  title: data.title,
+  success: !data.error,
+  error: data.error,
+  site_type: data.metadata?.siteType,  // Optional enhancement
+  content_length: data.content?.length || 0  // Optional enhancement
+})),
     context: {
       document_available: !!extracted_summary,
       conversation_context_available: !!summaryContext,
@@ -926,7 +944,8 @@ for await (const chunk of stream) {
       processedUrls,
       urlData,
       urlContent,
-      fileContext
+      fileContext,
+    _file_upload_ids // ✅ Pass the file upload IDs
     );
   });
 
@@ -966,7 +985,7 @@ for await (const chunk of stream) {
     }
   };
 };
-// 🚀 OPTIMIZED URL PROCESSING - Non-blocking with immediate feedback
+// 🚀 IMPROVED URL PROCESSING - Process all URLs together
 async function processUrlsOptimized(userMessage, res) {
   let urlData = [];
   let urlContent = "";
@@ -983,7 +1002,7 @@ async function processUrlsOptimized(userMessage, res) {
     return { urlData, urlContent, processedUrls, fullUserMessage };
   }
 
-  console.log(`🔗 Found ${extractedUrls.length} URLs - processing optimized`);
+  console.log(`🔗 Found ${extractedUrls.length} URLs - processing all together with universal extractor`);
 
   // Send URL processing status immediately
   res.write(JSON.stringify({
@@ -994,76 +1013,78 @@ async function processUrlsOptimized(userMessage, res) {
   }) + "\n");
 
   try {
-    // ⚡ Process URLs with timeout and parallel processing
-    const urlPromises = extractedUrls.map(async (url) => {
-      try {
-        // Set a 3-second timeout for each URL
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('URL processing timeout')), 3000)
-        );
-        
-        const urlProcessPromise = processUrls([url]);
-        
-        const result = await Promise.race([urlProcessPromise, timeoutPromise]);
-        return result[0]; // processUrls returns array
-      } catch (error) {
-        console.error(`❌ URL processing failed for ${url}:`, error.message);
-        return {
-          url: url,
-          title: "Failed to load",
-          content: "",
-          error: error.message,
-        };
-      }
-    });
-
-    // Wait for all URLs with a maximum 4-second total timeout
-    const allUrlsPromise = Promise.all(urlPromises);
-    const totalTimeoutPromise = new Promise((resolve) =>
-      setTimeout(() => {
-        console.log("⚠️ URL processing timeout - proceeding with partial results");
-        resolve([]);
-      }, 4000)
-    );
-
-    urlData = await Promise.race([allUrlsPromise, totalTimeoutPromise]);
+    // ✅ PROCESS ALL URLs TOGETHER (not individually)
+    urlData = await processUrls(extractedUrls); // This processes all URLs in one call
     
     if (urlData && urlData.length > 0) {
+      // ✅ Get all URLs that were attempted (including failed ones)
       processedUrls = extractedUrls;
       
-      // Create URL content summary
+      // ✅ Create URL content summary with MORE content and better formatting
       urlContent = urlData
         .filter((data) => data && data.content && !data.error)
-        .map((data) => 
-          `URL: ${data.url}\nTitle: ${data.title}\nContent: ${data.content.substring(0, 1500)}\n---`
-        )
-        .join("\n");
+        .map((data, index) => {
+          const siteType = data.metadata?.siteType ? ` [${data.metadata.siteType.toUpperCase()}]` : '';
+          const contentPreview = data.content.length > 4000 
+            ? data.content.substring(0, 4000) + "... [content truncated]"
+            : data.content;
+          
+          return `=== URL ${index + 1}${siteType} ===
+URL: ${data.url}
+Title: ${data.title}
+Description: ${data.description || 'No description available'}
 
-      // Add URL references to user message
+Content:
+${contentPreview}
+
+${'='.repeat(80)}`;
+        })
+        .join("\n\n");
+
+      // ✅ Add URL references to user message
       if (processedUrls.length > 0) {
-        fullUserMessage += `\n[Referenced URLs: ${processedUrls.join(", ")}]`;
+        const successfulCount = urlData.filter(d => !d.error).length;
+        fullUserMessage += `\n\n[Referenced ${successfulCount}/${processedUrls.length} URLs successfully processed]`;
       }
 
-      // Send completion status
+      // Send completion status with details
+      const successfulUrls = urlData.filter((d) => d && !d.error);
+      const failedUrls = urlData.filter((d) => d && d.error);
+      
       res.write(JSON.stringify({
         type: "url_processing",
         status: "completed",
-        processed: urlData.length,
-        successful: urlData.filter((d) => d && !d.error).length,
+        total_urls: urlData.length,
+        successful: successfulUrls.length,
+        failed: failedUrls.length,
+        content_extracted: urlContent.length > 0,
+        failed_urls: failedUrls.map(d => ({ url: d.url, error: d.error })),
+        successful_urls: successfulUrls.map(d => ({ 
+          url: d.url, 
+          title: d.title, 
+          site_type: d.metadata?.siteType,
+          content_length: d.content?.length || 0 
+        }))
       }) + "\n");
+      
+      console.log(`✅ Batch URL processing completed: ${successfulUrls.length}/${urlData.length} successful`);
+      console.log(`📄 Total URL content: ${urlContent.length.toLocaleString()} characters`);
     }
 
   } catch (error) {
-    console.error("❌ URL processing error:", error);
+    console.error("❌ Batch URL processing error:", error);
     res.write(JSON.stringify({
       type: "url_processing",
       status: "error",
-      error: "Failed to process URLs",
+      error: "Failed to process URLs in batch",
+      details: error.message
     }) + "\n");
   }
 
   return { urlData, urlContent, processedUrls, fullUserMessage };
 }
+
+
 
 // ✅ HELPER FUNCTION: ROLLBACK PENDING FILES
 async function rollbackPendingFiles(fileIds) {
@@ -1189,18 +1210,210 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 
   
 // ✅ ALWAYS FULL CONTEXT: No truncation, no token limits for files
+// ✅ ALWAYS FULL CONTEXT: No truncation, no token limits for files
+// async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage) {
+//   if (!conversation_id || isNaN(conversation_id)) {
+//     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "none" };
+//   }
+
+//   try {
+//     const hasNewUpload = (extracted_summary && extracted_summary.trim().length > 0 && extracted_summary !== "Success");
+//     const isAskingAboutFiles = checkIfAskingAboutFiles(userMessage);
+
+//     console.log(`📄 New upload: ${hasNewUpload}, Asking about files: ${isAskingAboutFiles}`);
+
+//     // Get ALL files - no status filtering
+//     const allFiles = await executeQuery(
+//       `SELECT file_path, extracted_text, file_metadata, created_at, status
+//        FROM uploaded_files 
+//        WHERE conversation_id = ? AND user_id = ? 
+//        ORDER BY created_at DESC`,
+//       [conversation_id, user_id]
+//     );
+
+//     console.log(`🔍 Found ${allFiles.length} total files in conversation`);
+    
+//     const fileNames = [];
+//     const validFiles = [];
+
+//     // Process ALL files and get their COMPLETE content
+//     if (allFiles && allFiles.length > 0) {
+//       allFiles.forEach((file, index) => {
+//         let fileName = "Unknown File";
+//         if (file.file_metadata) {
+//           try {
+//             const metadata = JSON.parse(file.file_metadata);
+//             fileName = metadata.original_filename || metadata.display_filename || fileName;
+//           } catch (e) {
+//             fileName = file.file_path?.split('/').pop() || fileName;
+//           }
+//         }
+//         fileNames.push(fileName);
+
+//         // ✅ INCLUDE ALL FILES WITH ANY VALID CONTENT
+//         if (file.extracted_text && 
+//             file.extracted_text !== "No readable content extracted" && 
+//             file.extracted_text !== "Text extraction failed" &&
+//             file.extracted_text !== "[Error extracting text]" &&
+//             file.extracted_text !== "Success" && // ✅ EXCLUDE "Success" placeholder
+//             file.extracted_text.trim().length > 10) {
+          
+//           validFiles.push({ 
+//             ...file, 
+//             fileName,
+//             isNew: file.status === 'pending_response',
+//             contentLength: file.extracted_text.length
+//           });
+          
+//           console.log(`✅ Including file: ${fileName} (${file.extracted_text.length} chars)`);
+//         } else {
+//           console.log(`❌ Skipping file with no content: ${fileName} - extracted_text: "${file.extracted_text?.substring(0, 50)}..."`);
+//         }
+//       });
+//     }
+
+//     // ✅ ALWAYS PROVIDE FULL CONTEXT - No conditions, no limits
+//     let fullContext = "";
+    
+//     // ✅ REMOVE THIS SECTION - Don't use extracted_summary for new uploads
+//     // Instead, get the actual extracted text from the most recent file
+//     if (hasNewUpload) {
+//       console.log(`⚠️ New upload detected but extracted_summary is: "${extracted_summary}"`);
+//       // Find the most recent file and use its extracted text
+//       const mostRecentFile = validFiles.find(file => file.isNew);
+//       if (mostRecentFile && mostRecentFile.extracted_text) {
+//         fullContext += `📎 NEWLY UPLOADED FILE:\n${mostRecentFile.extracted_text}\n`;
+//         console.log(`📄 Using actual extracted text from new file: ${mostRecentFile.extracted_text.length} characters`);
+//       }
+//     }
+    
+//     // ✅ ADD ALL EXISTING FILES - COMPLETE CONTENT, NO TRUNCATION
+//     if (validFiles.length > 0) {
+//       const fileContexts = validFiles.map(file => {
+//         const statusInfo = file.isNew ? ' [JUST UPLOADED]' : '';
+//         console.log(`📄 Adding FULL content for: ${file.fileName} (${file.contentLength} chars)`);
+//         return `📎 FILE: ${file.fileName}${statusInfo}\n${file.extracted_text}`;
+//       });
+
+//       if (fileContexts.length > 0) {
+//         const separator = fullContext ? `\n${'='.repeat(60)}\n\nALL FILES IN CONVERSATION:\n\n` : `ALL FILES IN CONVERSATION:\n\n`;
+//         fullContext += separator + fileContexts.join('\n\n' + '='.repeat(50) + '\n\n');
+//       }
+//     }
+
+//     const totalChars = fullContext.length;
+//     const estimatedTokens = Math.ceil(totalChars / 4);
+    
+//     console.log(`📄 COMPLETE FILE CONTEXT PROVIDED:`);
+//     console.log(`   - Files: ${validFiles.length}`);
+//     console.log(`   - Total Characters: ${totalChars.toLocaleString()}`);
+//     console.log(`   - Estimated Tokens: ${estimatedTokens.toLocaleString()}`);
+//     console.log(`   - No Truncation: ✅ All content included`);
+
+//     return {
+//       fileContext: fullContext,
+//       fileNames: fileNames,
+//       fileCount: validFiles.length,
+//       contextType: "always_full_context",
+//       totalTokens: estimatedTokens,
+//       totalChars: totalChars,
+//       noTruncation: true
+//     };
+
+//   } catch (error) {
+//     console.error("❌ Error getting full file context:", error);
+//     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+//   }
+// }
+// ✅ SIMPLE: Always get full file context from database
+// async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage) {
+//   if (!conversation_id || isNaN(conversation_id)) {
+//     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "none" };
+//   }
+
+//   try {
+//     console.log(`📄 Getting file context for conversation: ${conversation_id}`);
+
+//     // Get ALL files from database - simple query
+//     const allFiles = await executeQuery(
+//       `SELECT file_path, extracted_text, file_metadata, created_at, status
+//        FROM uploaded_files 
+//        WHERE conversation_id = ? AND user_id = ? 
+//        ORDER BY created_at DESC`,
+//       [conversation_id, user_id]
+//     );
+
+//     console.log(`🔍 Found ${allFiles.length} total files in conversation`);
+    
+//     const fileNames = [];
+//     let fullContext = "";
+//     let validFileCount = 0;
+
+//     // Process ALL files - simple loop
+//     if (allFiles && allFiles.length > 0) {
+//       allFiles.forEach((file, index) => {
+//         // Get file name
+//         let fileName = "Unknown File";
+//         if (file.file_metadata) {
+//           try {
+//             const metadata = JSON.parse(file.file_metadata);
+//             fileName = metadata.original_filename || metadata.display_filename || fileName;
+//           } catch (e) {
+//             fileName = file.file_path?.split('/').pop() || fileName;
+//           }
+//         }
+//         fileNames.push(fileName);
+
+//         // ✅ SIMPLE: Include file if it has valid extracted text
+//       // Replace the complex filtering with this simple check:
+// if (file.extracted_text && 
+//     file.extracted_text.trim().length > 50 && // Increase minimum length
+//     !file.extracted_text.includes("extraction failed") &&
+//     !file.extracted_text.includes("No readable content")) {
+    
+//     validFileCount++;
+//     const statusInfo = file.status === 'pending_response' ? ' [JUST UPLOADED]' : '';
+    
+//     // ✅ Add the full extracted text
+//     fullContext += `📎 FILE: ${fileName}${statusInfo}\n${file.extracted_text}\n\n${'='.repeat(50)}\n\n`;
+    
+//     console.log(`✅ Added file: ${fileName} (${file.extracted_text.length} chars)`);
+//     console.log(`📄 First 200 chars: ${file.extracted_text.substring(0, 200)}`);
+// } else {
+//     console.log(`❌ Skipped file: ${fileName} - extracted_text: "${file.extracted_text?.substring(0, 100)}..."`);
+// }
+//       });
+//     }
+
+//     console.log(`📄 SIMPLE FILE CONTEXT:`);
+//     console.log(`   - Total Files: ${allFiles.length}`);
+//     console.log(`   - Valid Files: ${validFileCount}`);
+//     console.log(`   - Total Characters: ${fullContext.length.toLocaleString()}`);
+//     console.log(`   - No Truncation: ✅ Full content provided`);
+
+//     return {
+//       fileContext: fullContext.trim(),
+//       fileNames: fileNames,
+//       fileCount: validFileCount,
+//       contextType: "simple_full_context"
+//     };
+
+//   } catch (error) {
+//     console.error("❌ Error getting file context:", error);
+//     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+//   }
+// }
+
+ // ✅ SIMPLE: Always get full file context from database with NEW FILE PRIORITY
 async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage) {
   if (!conversation_id || isNaN(conversation_id)) {
     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "none" };
   }
 
   try {
-    const hasNewUpload = (extracted_summary && extracted_summary.trim().length > 0 && extracted_summary !== "Success");
-    const isAskingAboutFiles = checkIfAskingAboutFiles(userMessage);
+    console.log(`📄 Getting file context for conversation: ${conversation_id}`);
 
-    console.log(`📄 New upload: ${hasNewUpload}, Asking about files: ${isAskingAboutFiles}`);
-
-    // Get ALL files - no status filtering
+    // Get ALL files from database - simple query
     const allFiles = await executeQuery(
       `SELECT file_path, extracted_text, file_metadata, created_at, status
        FROM uploaded_files 
@@ -1212,11 +1425,25 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
     console.log(`🔍 Found ${allFiles.length} total files in conversation`);
     
     const fileNames = [];
-    const validFiles = [];
+    let fullContext = "";
+    let validFileCount = 0;
 
-    // Process ALL files and get their COMPLETE content
+    // ✅ CHECK IF THERE'S A NEW UPLOAD
+    const hasNewUpload = (extracted_summary && 
+                         extracted_summary.trim().length > 50 && 
+                         extracted_summary !== "Success" && 
+                         !extracted_summary.includes("extraction failed"));
+
+    // ✅ PRIORITY 1: Add new upload first if exists
+    if (hasNewUpload) {
+      fullContext += `🆕 NEWLY UPLOADED FILE (PRIORITY):\n${extracted_summary}\n\n${'='.repeat(60)}\n\n`;
+      console.log(`✅ Added NEW UPLOAD as priority: ${extracted_summary.length} chars`);
+    }
+
+    // ✅ PRIORITY 2: Add existing files (excluding the new one if it exists)
     if (allFiles && allFiles.length > 0) {
       allFiles.forEach((file, index) => {
+        // Get file name
         let fileName = "Unknown File";
         if (file.file_metadata) {
           try {
@@ -1228,79 +1455,53 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
         }
         fileNames.push(fileName);
 
-        // ✅ INCLUDE ALL FILES WITH ANY VALID CONTENT
+        // ✅ Include file if it has valid extracted text
         if (file.extracted_text && 
-            file.extracted_text !== "No readable content extracted" && 
-            file.extracted_text !== "Text extraction failed" &&
-            file.extracted_text !== "[Error extracting text]" &&
-            file.extracted_text !== "Success" && 
-            file.extracted_text.trim().length > 10) {
-          
-          validFiles.push({ 
-            ...file, 
-            fileName,
-            isNew: file.status === 'pending_response',
-            contentLength: file.extracted_text.length
-          });
-          
-          console.log(`✅ Including file: ${fileName} (${file.extracted_text.length} chars)`);
+            file.extracted_text.trim().length > 50 && 
+            !file.extracted_text.includes("extraction failed") &&
+            !file.extracted_text.includes("No readable content")) {
+            
+            // ✅ SKIP if this is the same as new upload (avoid duplication)
+            if (hasNewUpload && file.extracted_text === extracted_summary) {
+              console.log(`⏭️ Skipped duplicate: ${fileName} (already added as new upload)`);
+              return;
+            }
+            
+            validFileCount++;
+            const statusInfo = file.status === 'pending_response' ? ' [RECENT]' : ' [PREVIOUS]';
+            
+            // ✅ Add as previous file context
+            fullContext += `📎 FILE: ${fileName}${statusInfo}\n${file.extracted_text}\n\n${'='.repeat(50)}\n\n`;
+            
+            console.log(`✅ Added previous file: ${fileName} (${file.extracted_text.length} chars)`);
         } else {
-          console.log(`❌ Skipping file with no content: ${fileName}`);
+            console.log(`❌ Skipped file: ${fileName} - invalid extracted text`);
         }
       });
     }
 
-    // ✅ ALWAYS PROVIDE FULL CONTEXT - No conditions, no limits
-    let fullContext = "";
-    
-    // Add new upload content first
-    if (hasNewUpload && extracted_summary !== "Success") {
-      fullContext += `📎 NEWLY UPLOADED FILES:\n${extracted_summary}\n`;
-      console.log(`📄 New upload context: ${extracted_summary.length} characters`);
-    }
-    
-    // ✅ ADD ALL EXISTING FILES - COMPLETE CONTENT, NO TRUNCATION
-    if (validFiles.length > 0) {
-      const fileContexts = validFiles.map(file => {
-        const statusInfo = file.isNew ? ' [JUST UPLOADED]' : '';
-        console.log(`📄 Adding FULL content for: ${file.fileName} (${file.contentLength} chars)`);
-        return `📎 FILE: ${file.fileName}${statusInfo}\n${file.extracted_text}`;
-      });
-
-      if (fileContexts.length > 0) {
-        const separator = fullContext ? `\n${'='.repeat(60)}\n\nALL FILES IN CONVERSATION:\n\n` : `ALL FILES IN CONVERSATION:\n\n`;
-        fullContext += separator + fileContexts.join('\n\n' + '='.repeat(50) + '\n\n');
-      }
+    // ✅ Add header for previous files if new upload exists
+    if (hasNewUpload && validFileCount > 0) {
+      fullContext = fullContext.replace('📎 FILE:', '\n📚 PREVIOUS FILES FOR REFERENCE:\n\n📎 FILE:');
     }
 
-    const totalChars = fullContext.length;
-    const estimatedTokens = Math.ceil(totalChars / 4);
-    
-    console.log(`📄 COMPLETE FILE CONTEXT PROVIDED:`);
-    console.log(`   - Files: ${validFiles.length}`);
-    console.log(`   - Total Characters: ${totalChars.toLocaleString()}`);
-    console.log(`   - Estimated Tokens: ${estimatedTokens.toLocaleString()}`);
-    console.log(`   - No Truncation: ✅ All content included`);
+    console.log(`📄 PRIORITIZED FILE CONTEXT:`);
+    console.log(`   - New Upload: ${hasNewUpload ? 'YES (PRIORITY)' : 'No'}`);
+    console.log(`   - Previous Files: ${validFileCount}`);
+    console.log(`   - Total Characters: ${fullContext.length.toLocaleString()}`);
 
     return {
-      fileContext: fullContext,
+      fileContext: fullContext.trim(),
       fileNames: fileNames,
-      fileCount: validFiles.length,
-      contextType: "always_full_context",
-      totalTokens: estimatedTokens,
-      totalChars: totalChars,
-      noTruncation: true
+      fileCount: validFileCount + (hasNewUpload ? 1 : 0),
+      contextType: hasNewUpload ? "new_upload_priority" : "existing_files_only"
     };
 
   } catch (error) {
-    console.error("❌ Error getting full file context:", error);
+    console.error("❌ Error getting file context:", error);
     return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
   }
 }
-
-// ✅ REMOVE ALL TOKEN LIMITS AND SMART SELECTION - Not needed anymore
-// function smartFileSelection() - DELETED
-// function selectRelevantFiles() - DELETED
 
 // ✅ ALWAYS DETECT FILE QUESTIONS - More comprehensive
 function checkIfAskingAboutFiles(userMessage) {
@@ -1330,8 +1531,8 @@ function checkIfAskingAboutFiles(userMessage) {
  
 
 
-// ✅ UPDATED: Handle large file context without limits
-function buildAIMessagesWithSmartContext(summaryContext, extracted_summary, userMessage, userInfo = null, fileNames = [], fileContext = "", contextType = "none") {
+// ✅ UPDATED: Include URL content in AI context
+function buildAIMessagesWithSmartContext(summaryContext, extracted_summary, userMessage, userInfo = null, fileNames = [], fileContext = "", contextType = "none", urlContent = "") {
   const currentDate = new Date().toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
@@ -1355,9 +1556,11 @@ ${userContext}
 When asked your name: "My name is QhashAI."
 Developer: "I was developed by the QuantumHash development team."
 
-You can analyze content from URLs and documents. When referencing external content, cite your sources.
+You can analyze content from URLs and documents. When referencing external content, cite your sources clearly.
 
-You have access to the complete content of all uploaded files. Use this information to provide detailed, accurate responses about the files.
+You have access to the complete content of all uploaded files and URL content. Use this information to provide detailed, accurate responses.
+
+For product comparisons, analyze specifications, prices, features, and provide comprehensive comparisons.
 
 Be helpful, accurate, professional, and use all available context to provide the best possible response.`,
   };
@@ -1372,6 +1575,15 @@ Be helpful, accurate, professional, and use all available context to provide the
     });
   }
 
+   // ✅ ADD URL CONTENT FIRST (for product comparisons)
+  if (urlContent && urlContent.length > 0) {
+    finalMessages.push({
+      role: "system",
+      content: `WEBSITE CONTENT FOR ANALYSIS:\n${urlContent}`,
+    });
+    console.log(`🔗 Added URL content: ${urlContent.length.toLocaleString()} characters`);
+  }
+
   // ✅ ADD COMPLETE FILE CONTEXT - NO LIMITS
   if (fileContext && fileContext.length > 0) {
     finalMessages.push({
@@ -1379,15 +1591,19 @@ Be helpful, accurate, professional, and use all available context to provide the
       content: `COMPLETE FILE CONTENT:\n${fileContext}`,
     });
     console.log(`📄 Added COMPLETE file context: ${fileContext.length.toLocaleString()} characters`);
+    // console.log(`📄 First 300 chars of context: ${fileContext.substring(0, 300)}`);
   }
+// Add this debug line in buildAIMessagesWithSmartContext
+console.log("🔍 DEBUG - fileContext parameter:", fileContext?.substring(0, 200));
+console.log("🔍 DEBUG - fileContext length:", fileContext?.length);
 
   // Add current document context if available (new upload)
-  if (extracted_summary && extracted_summary !== "Success" && extracted_summary !== "No readable content") {
-    finalMessages.push({
-      role: "system",
-      content: `ADDITIONAL NEW DOCUMENT:\n${extracted_summary}`,
-    });
-  }
+  // if (extracted_summary && extracted_summary !== "Success" && extracted_summary !== "No readable content") {
+  //   finalMessages.push({
+  //     role: "system",
+  //     content: `ADDITIONAL NEW DOCUMENT:\n${extracted_summary}`,
+  //   });
+  // }
 
   // Add user message
   finalMessages.push({ role: "user", content: userMessage || "" });
@@ -1400,6 +1616,7 @@ Be helpful, accurate, professional, and use all available context to provide the
   console.log(`   - Total Messages: ${finalMessages.length}`);
   console.log(`   - Total Characters: ${totalContextLength.toLocaleString()}`);
   console.log(`   - Estimated Tokens: ${estimatedTokens.toLocaleString()}`);
+  console.log(`   - URL Content: ${urlContent ? 'INCLUDED' : 'None'}`);
   console.log(`   - File Context: ${fileContext ? 'FULL CONTENT' : 'None'}`);
 
   return finalMessages;
@@ -1493,7 +1710,8 @@ async function handleAllBackgroundTasksOptimized(
   processedUrls = [],
   urlData = [],
   urlContent = "",
-  fileContext = ""
+  fileContext = "",
+  _file_upload_ids = [] // ✅ Add this parameter
 ) {
   try {
     console.log("🔄 Starting optimized background tasks for conversation:", conversation_id, "user:", user_id);
@@ -1554,7 +1772,8 @@ async function handleAllBackgroundTasksOptimized(
           suggestions, 
           processedUrls, 
           urlData, 
-          fileContext
+          fileContext,
+          _file_upload_ids // ✅ Pass file IDs
         ),
         new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 5000))
       ]),
@@ -1594,6 +1813,163 @@ async function handleAllBackgroundTasksOptimized(
 
  
 // ✅ FIXED SAVE TO DATABASE FUNCTION
+// async function saveToDatabase(
+//   conversation_id,
+//   userMessage,
+//   aiResponse,
+//   uploadedFiles,
+//   extracted_summary,
+//   suggestions,
+//   processedUrls = [],
+//   urlData = [],
+//   fileContext = ""
+// ) {
+//   try {
+//       // ✅ SIMPLE FIX: Get NEW files directly from database instead of relying on parameter
+//     const newFiles = await executeQuery(
+//       `SELECT file_path, file_metadata, extracted_text, created_at 
+//        FROM uploaded_files 
+//        WHERE conversation_id = ? 
+//        AND status = 'pending_response'
+//        AND created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+//        ORDER BY created_at DESC`,
+//       [conversation_id]
+//     );
+    
+//     console.log(`📁 Found ${newFiles.length} NEW files with pending_response status`);
+
+//     // Prepare file data from CONFIRMED files only
+//     const filePaths = [];
+//     const fileNames = [];
+//     const fileMetadataArray = [];
+
+//   if (newFiles && newFiles.length > 0) {
+//       newFiles.forEach(file => {
+//         if (file.file_path) {
+//           filePaths.push(file.file_path);
+//         }
+        
+//         // Extract file name and metadata
+//         if (file.file_metadata) {
+//           try {
+//             const metadata = JSON.parse(file.file_metadata);
+//             fileNames.push(metadata.original_filename || metadata.display_filename || 'Unknown');
+//             fileMetadataArray.push(file.file_metadata);
+//           } catch (parseError) {
+//             console.error("❌ Error parsing file metadata:", parseError);
+//             fileNames.push('Unknown');
+//           }
+//         } else {
+//           fileNames.push('Unknown');
+//         }
+//       });
+//     }
+
+//    // Prepare data for database - ONLY NEW FILES
+//     const filePathsString = filePaths.length > 0 ? filePaths.join(",") : null;
+//     const fileNamesString = fileNames.length > 0 ? fileNames.join(",") : null;
+//     const fileMetadataString = fileMetadataArray.length > 0 ? JSON.stringify(fileMetadataArray) : null;
+
+//      // ✅ IMPROVED URL DATA PROCESSING
+//      // ✅ IMPROVED URL DATA PROCESSING - Save ALL URLs and their metadata
+//     const urlsString = processedUrls.length > 0 ? processedUrls.join(",") : null;
+
+//    // ✅ Save complete URL content with metadata
+//     const urlContentString = urlData.length > 0
+//       ? urlData.map((data, index) => {
+//           const status = data.error ? 'FAILED' : 'SUCCESS';
+//           const siteType = data.metadata?.siteType || 'unknown';
+//           const contentLength = data.content?.length || 0;
+
+//            // ✅ SAVE FULL CONTENT - NO TRUNCATION
+//           const content = data.content && !data.error
+//             ? data.content // Full content without truncation
+//             : `[ERROR: ${data.error}]`;
+          
+//           return `[URL ${index + 1} - ${status} - ${siteType.toUpperCase()}]
+// URL: ${data.url}
+// Title: ${data.title || 'No title'}
+// Description: ${data.description || 'No description'}
+// Content Length: ${contentLength} characters
+// Site Type: ${siteType}
+
+// Content:
+// ${content}
+
+// ${'='.repeat(100)}`;
+//         }).join("\n\n")
+//       : null;
+
+//     // ✅ Create URL metadata summary
+//     const urlMetadata = urlData.length > 0
+//       ? JSON.stringify(urlData.map(data => ({
+//           url: data.url,
+//           title: data.title,
+//           success: !data.error,
+//           error: data.error || null,
+//           site_type: data.metadata?.siteType,
+//           content_length: data.content?.length || 0,
+//           extraction_method: data.metadata?.extractionMethod,
+//           hostname: data.metadata?.hostname,
+//           processed_at: new Date().toISOString()
+//         })))
+//       : null;
+
+//     // ✅ COMBINE EXTRACTED TEXT WITH URL CONTENT
+//     let allExtractedText = "";
+//     if (extracted_summary) {
+//       allExtractedText += `CURRENT UPLOAD:\n${extracted_summary}\n\n`;
+//     }
+//     if (fileContext) {
+//       allExtractedText += `PREVIOUS FILES:\n${fileContext}\n\n`;
+//     }
+//     if (urlContentString) {
+//       allExtractedText += `URL CONTENT (${urlData.length} URLs):\n${urlContentString}`;
+//     }
+
+
+//     // ✅ UPDATED INSERT QUERY WITH FILE_METADATA
+//      await executeQuery(
+//       `INSERT INTO chat_history 
+//        (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, file_metadata, suggestions, urls, url_content, url_metadata) 
+//        VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+//       [
+//         conversation_id,
+//         userMessage,
+//         aiResponse,
+//         filePathsString, // Only new file paths
+//         allExtractedText || null,
+//         fileNamesString, // Only new file names
+//         fileMetadataString, // Only new file metadata
+//         suggestions && suggestions.length > 0 ? JSON.stringify(suggestions) : null,
+//         urlsString,
+//         urlContentString,
+//         urlMetadata,
+//       ]
+//     );
+
+//  console.log("✅ Database save successful with NEW files only:", {
+//       new_files_found: newFiles.length,
+//       new_file_paths: filePaths,
+//       new_file_names: fileNames,
+//       has_metadata: !!fileMetadataString,
+//       total_urls: processedUrls.length,
+//       successful_urls: urlData.filter(d => !d.error).length,
+//       failed_urls: urlData.filter(d => d.error).length,
+//       url_content_length: urlContentString?.length || 0,
+//       full_content_saved: true,
+//       has_url_metadata: !!urlMetadata
+//     });
+    
+//     return true;
+//   } catch (error) {
+//     console.error("❌ Database save error:", error);
+//     throw error;
+//   }
+// }
+// ✅ FIXED SAVE TO DATABASE FUNCTION
+// ✅ FIXED SAVE TO DATABASE FUNCTION
+// ✅ FIXED SAVE TO DATABASE FUNCTION
 async function saveToDatabase(
   conversation_id,
   userMessage,
@@ -1603,88 +1979,139 @@ async function saveToDatabase(
   suggestions,
   processedUrls = [],
   urlData = [],
-  fileContext = ""
+  fileContext = "",
+  _file_upload_ids = [] // ✅ Add this parameter
 ) {
   try {
-    // ✅ HANDLE UPLOADED FILES WITH CONFIRMED STATUS CHECK
-    const filesArray = Array.isArray(uploadedFiles) ? uploadedFiles : [];
-    const confirmedFiles = filesArray.filter(file => file && file.status !== 'pending_response');
+    // ✅ SIMPLE FIX: Only save file data if there are actual file upload IDs
+    let filePaths = [];
+    let fileNames = [];
+    let fileMetadataArray = [];
     
-    console.log(`📁 Processing ${filesArray.length} total files, ${confirmedFiles.length} confirmed files`);
-    
-    // Prepare file data from CONFIRMED files only
-    const filePaths = [];
-    const fileNames = [];
-    const fileMetadataArray = [];
+    const hasNewFiles = _file_upload_ids && Array.isArray(_file_upload_ids) && _file_upload_ids.length > 0;
 
-    confirmedFiles.forEach(file => {
-      if (file.file_path) {
-        filePaths.push(file.file_path);
-      }
+    if (hasNewFiles) {
+      console.log(`📁 New files detected - Processing ${_file_upload_ids.length} file IDs`);
       
-      // Extract file name and metadata
-      if (file.file_metadata) {
-        try {
-          const metadata = JSON.parse(file.file_metadata);
-          fileNames.push(metadata.original_filename || metadata.display_filename || 'Unknown');
-          fileMetadataArray.push(file.file_metadata);
-        } catch (parseError) {
-          console.error("❌ Error parsing file metadata:", parseError);
-          fileNames.push(file.file_name || file.original_filename || 'Unknown');
-        }
-      } else {
-        // Fallback to direct file properties
-        fileNames.push(file.file_name || file.original_filename || 'Unknown');
-      }
-    });
+      // Get files by their IDs
+      const placeholders = _file_upload_ids.map(() => '?').join(',');
+      const newFiles = await executeQuery(
+        `SELECT file_path, file_metadata, extracted_text, created_at 
+         FROM uploaded_files 
+         WHERE id IN (${placeholders})
+         AND conversation_id = ?`,
+        [..._file_upload_ids, conversation_id]
+      );
+      
+      console.log(`📁 Found ${newFiles.length} files for IDs: ${_file_upload_ids.join(', ')}`);
 
-    // Prepare data for database
+      if (newFiles && newFiles.length > 0) {
+        newFiles.forEach(file => {
+          if (file.file_path) {
+            filePaths.push(file.file_path);
+          }
+          
+          // Extract file name and metadata
+          if (file.file_metadata) {
+            try {
+              const metadata = JSON.parse(file.file_metadata);
+              fileNames.push(metadata.original_filename || metadata.display_filename || 'Unknown');
+              fileMetadataArray.push(file.file_metadata);
+            } catch (parseError) {
+              console.error("❌ Error parsing file metadata:", parseError);
+              fileNames.push('Unknown');
+            }
+          } else {
+            fileNames.push('Unknown');
+          }
+        });
+      }
+    } else {
+      console.log("📁 No new files - Skipping file data save");
+    }
+
+    // Prepare data for database - ONLY if there are new files
     const filePathsString = filePaths.length > 0 ? filePaths.join(",") : null;
     const fileNamesString = fileNames.length > 0 ? fileNames.join(",") : null;
     const fileMetadataString = fileMetadataArray.length > 0 ? JSON.stringify(fileMetadataArray) : null;
 
-    // Prepare URL data
+    // ✅ URL processing code (keep existing)
     const urlsString = processedUrls.length > 0 ? processedUrls.join(",") : null;
     const urlContentString = urlData.length > 0
-      ? urlData
-          .filter((data) => data && data.content && !data.error)
-          .map((data) => `[${data.title || 'Untitled'}] ${data.content}`)
-          .join("\n---\n")
+      ? urlData.map((data, index) => {
+          const status = data.error ? 'FAILED' : 'SUCCESS';
+          const siteType = data.metadata?.siteType || 'unknown';
+          const contentLength = data.content?.length || 0;
+          const content = data.content && !data.error
+            ? data.content
+            : `[ERROR: ${data.error}]`;
+          
+          return `[URL ${index + 1} - ${status} - ${siteType.toUpperCase()}]
+URL: ${data.url}
+Title: ${data.title || 'No title'}
+Description: ${data.description || 'No description'}
+Content Length: ${contentLength} characters
+Site Type: ${siteType}
+
+Content:
+${content}
+
+${'='.repeat(100)}`;
+        }).join("\n\n")
       : null;
 
-    // ✅ COMBINE ONLY CONFIRMED EXTRACTED TEXT
+    const urlMetadata = urlData.length > 0
+      ? JSON.stringify(urlData.map(data => ({
+          url: data.url,
+          title: data.title,
+          success: !data.error,
+          error: data.error || null,
+          site_type: data.metadata?.siteType,
+          content_length: data.content?.length || 0,
+          extraction_method: data.metadata?.extractionMethod,
+          hostname: data.metadata?.hostname,
+          processed_at: new Date().toISOString()
+        })))
+      : null;
+
+    // ✅ COMBINE EXTRACTED TEXT WITH URL CONTENT
     let allExtractedText = "";
     if (extracted_summary) {
       allExtractedText += `CURRENT UPLOAD:\n${extracted_summary}\n\n`;
     }
     if (fileContext) {
-      allExtractedText += `PREVIOUS FILES:\n${fileContext}`;
+      allExtractedText += `PREVIOUS FILES:\n${fileContext}\n\n`;
+    }
+    if (urlContentString) {
+      allExtractedText += `URL CONTENT (${urlData.length} URLs):\n${urlContentString}`;
     }
 
-    // ✅ UPDATED INSERT QUERY WITH FILE_METADATA
-    await executeQuery(
+    // ✅ INSERT QUERY - file data will be null if no new upload
+     await executeQuery(
       `INSERT INTO chat_history 
-       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, file_metadata, suggestions, urls, url_content) 
-       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)`,
+       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, file_metadata, suggestions, urls, url_content, url_metadata) 
+       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         conversation_id,
         userMessage,
         aiResponse,
-        filePathsString,
+        filePathsString, // Will be null if no new files
         allExtractedText || null,
-        fileNamesString,
-        fileMetadataString, // ✅ ADD FILE METADATA
+        fileNamesString, // Will be null if no new files
+        fileMetadataString, // Will be null if no new files
         suggestions && suggestions.length > 0 ? JSON.stringify(suggestions) : null,
         urlsString,
         urlContentString,
+        urlMetadata,
       ]
     );
-
-    console.log("✅ Database save successful with confirmed files only:", {
-      total_files: filesArray.length,
-      confirmed_files: confirmedFiles.length,
-      files_saved: filePaths.length,
-      file_names: fileNames,
+    
+    console.log("✅ Database save successful:", {
+      has_new_files: hasNewFiles,
+      file_upload_ids: _file_upload_ids,
+      new_files_saved: filePaths.length,
+      new_file_paths: filePaths,
+      new_file_names: fileNames,
       has_metadata: !!fileMetadataString
     });
     
@@ -1694,6 +2121,8 @@ async function saveToDatabase(
     throw error;
   }
 }
+
+
 
 
 
@@ -1985,7 +2414,44 @@ async function generateAndSaveComprehensiveSummary(
        ORDER BY created_at ASC`,
       [conversation_id]
     );
+// ✅ GET ALL URLS FROM THIS CONVERSATION
+const allConversationUrls = await executeQuery(
+  `SELECT urls, url_metadata FROM chat_history 
+   WHERE conversation_id = ? AND urls IS NOT NULL
+   ORDER BY created_at ASC`,
+  [conversation_id]
+);
 
+// ✅ Create URL summary for the comprehensive summary
+let urlSummary = "";
+const importantUrls = new Set();
+
+if (allConversationUrls && allConversationUrls.length > 0) {
+  allConversationUrls.forEach(chat => {
+    if (chat.urls) {
+      const urls = chat.urls.split(',');
+      urls.forEach(url => importantUrls.add(url.trim()));
+    }
+    
+    // Extract successful URLs from metadata
+    if (chat.url_metadata) {
+      try {
+        const metadata = JSON.parse(chat.url_metadata);
+        metadata.forEach(urlMeta => {
+          if (urlMeta.success && urlMeta.site_type) {
+            importantUrls.add(`${urlMeta.url} [${urlMeta.site_type}]`);
+          }
+        });
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    }
+  });
+  
+  if (importantUrls.size > 0) {
+    urlSummary = `\n\nIMPORTANT URLs REFERENCED:\n${Array.from(importantUrls).slice(0, 10).join('\n')}`;
+  }
+}
     // ✅ Build conversation WITHOUT file content
     const completeConversation = [];
     
@@ -2064,11 +2530,14 @@ async function generateAndSaveComprehensiveSummary(
 4. Technical details or specific requests mentioned
 5. Files mentioned by name (not content)
 
-Keep it under 400 words for efficient context loading. Focus on conversation flow, not file content.`,
+Keep it under 400 words for efficient context loading. Focus on conversation flow, not file content.
+
+Also include any important URLs or websites that were referenced and discussed in the conversation.`,
+
       },
       {
         role: "user",
-        content: `Conversation to summarize:\n${finalConversationText}${filesSummary}`,
+        content: `Conversation to summarize:\n${finalConversationText}${filesSummary}${urlSummary}`,
       },
     ];
 
@@ -2087,14 +2556,16 @@ Keep it under 400 words for efficient context loading. Focus on conversation flo
         [summary, conversation_id]
       );
 
-      console.log("✅ Lightweight summary generated with Llama:", {
-        length: summary.length,
-        message_count: completeConversation.length,
-        files_mentioned: allConversationFiles.length,
-        conversation_id: conversation_id,
-        model: "Llama",
-        summary_preview: summary.substring(0, 100) + "...",
-      });
+     console.log("✅ Lightweight summary generated with Llama:", {
+  length: summary.length,
+  message_count: completeConversation.length,
+  files_mentioned: allConversationFiles.length,
+  urls_mentioned: importantUrls.size,
+  conversation_id: conversation_id,
+  model: "Llama",
+  summary_preview: summary.substring(0, 100) + "...",
+});
+
 
       return true;
     }
@@ -2119,6 +2590,11 @@ Keep it under 400 words for efficient context loading. Focus on conversation flo
       if (fileCount > 0) {
         basicSummary += ` ${fileCount} files were discussed.`;
       }
+// ✅ Mention URL count
+const urlCount = importantUrls?.size || 0;
+if (urlCount > 0) {
+  basicSummary += ` ${urlCount} URLs were referenced.`;
+}
 
       await executeQuery(
         "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -2230,13 +2706,14 @@ Be helpful, accurate, and concise. This is guest mode, so provide complete respo
         suggestions: suggestions,
         full_response: aiResponse,
         guest_mode: true,
-        processed_urls: urlData.map((data) => ({
-          url: data.url,
-          title: data.title,
-          success: !data.error,
-          error: data.error,
-          description: data.description,
-        })),
+       processed_urls: urlData.map((data) => ({
+  url: data.url,
+  title: data.title,
+  success: !data.error,
+  error: data.error,
+  site_type: data.metadata?.siteType,  // Optional enhancement
+  content_length: data.content?.length || 0  // Optional enhancement
+})) ,
         context: {
           url_content_available: !!urlContent,
           urls_processed: urlData.length,
