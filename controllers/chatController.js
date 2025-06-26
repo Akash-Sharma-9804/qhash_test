@@ -1562,7 +1562,13 @@ You have access to the complete content of all uploaded files and URL content. U
 
 For product comparisons, analyze specifications, prices, features, and provide comprehensive comparisons.
 
-Be helpful, accurate, professional, and use all available context to provide the best possible response.`,
+Be helpful, accurate, professional, and use all available context to provide the best possible response.`+ `
+
+Respond in a clear, engaging, and friendly tone. Use appropriate emojis 🎯✨😄 where helpful to highlight key points, actions, or emotions. Format your responses cleanly using line breaks, bullet points, and markdown for better readability. 
+
+**Ensure your responses are visually appealing, easy to scan, and interactive — use structured formatting, rich language, and helpful visual cues (like bold text, emojis, or bullet points) to enhance user understanding and engagement.**
+`
+,
   };
 
   const finalMessages = [systemPrompt];
