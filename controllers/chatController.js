@@ -6,6 +6,204 @@ const { extractUrls, processUrls } = require("../utils/urlProcessor");
 const { sanitizeDisplayName } = require("../utils/FilenameGenerator"); // ✅ ADD THIS
 const llama = require("../config/llama");
 const { selectOptimalModel } = require("../utils/tokenCounter");
+const FileGenerator = require("../utils/fileGenerator");
+// ✅ ADD THESE CONSTANTS AT THE TOP OF THE FILE
+const MAX_FILE_GENERATION_TIME = 10000; // 10 seconds max per file
+const MAX_CONCURRENT_FILES = 3; // Maximum files to generate simultaneously
+const RESPONSE_QUALITY_THRESHOLD = 60; // Minimum quality score
+
+// Add these imports at the top
+const natural = require("natural");
+const compromise = require("compromise");
+
+// ✅ SMART FILE CREATION DETECTION - Beyond regex
+function intelligentFileDetectionAnalysis(userMessage) {
+  if (!userMessage || typeof userMessage !== "string") {
+    return {
+      shouldCreateFile: false,
+      confidence: 0,
+      fileType: null,
+      intent: "none",
+    };
+  }
+
+  const message = userMessage.toLowerCase().trim();
+
+  // ✅ Use NLP for better understanding
+  const doc = compromise(userMessage);
+
+  // Extract verbs and nouns for intent analysis
+  const verbs = doc.verbs().out("array");
+  const nouns = doc.nouns().out("array");
+
+  let confidence = 0;
+  let fileType = null;
+  let intent = "none";
+
+  // ✅ HIGH CONFIDENCE INDICATORS (90-100%)
+  const highConfidencePatterns = [
+    /create\s+(a\s+)?(pdf|document|docx|word|excel|xlsx|txt|file)/i,
+    /generate\s+(a\s+)?(pdf|document|docx|word|excel|xlsx|txt|file)/i,
+    /make\s+(me\s+)?(a\s+)?(pdf|document|docx|word|excel|xlsx|txt|file)/i,
+    /download\s+(a\s+)?(pdf|document|docx|word|excel|xlsx|txt|file)/i,
+    /prepare\s+(a\s+)?(pdf|document|docx|word|excel|xlsx|txt|file)/i,
+    /draft\s+(a\s+)?(pdf|document|docx|word|excel|xlsx|txt|file)/i,
+    /write\s+(a\s+)?(pdf|document|docx|word|excel|xlsx|txt|file)/i,
+  ];
+
+  // ✅ MEDIUM CONFIDENCE INDICATORS (70-89%)
+  const mediumConfidencePatterns = [
+    /create.*?(letter|application|resume|cv|report|invoice|contract)/i,
+    /generate.*?(letter|application|resume|cv|report|invoice|contract)/i,
+    /make.*?(letter|application|resume|cv|report|invoice|contract)/i,
+    /write.*?(letter|application|resume|cv|report|invoice|contract)/i,
+    /draft.*?(letter|application|resume|cv|report|invoice|contract)/i,
+    /prepare.*?(letter|application|resume|cv|report|invoice|contract)/i,
+    /need.*?(downloadable|file|document)/i,
+    /want.*?(downloadable|file|document)/i,
+  ];
+
+  // ✅ CONTEXTUAL INDICATORS (50-69%)
+  const contextualPatterns = [
+    /can you (create|make|generate|write|draft|prepare)/i,
+    /please (create|make|generate|write|draft|prepare)/i,
+    /i need (a|an|some)/i,
+    /help me (create|make|generate|write|draft|prepare)/i,
+    /(format|template|example) (for|of)/i,
+  ];
+
+  // ✅ Check high confidence patterns
+  for (const pattern of highConfidencePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      confidence = 95;
+      fileType = detectFileType(match[0], message);
+      intent = "create_file";
+      break;
+    }
+  }
+
+  // ✅ Check medium confidence patterns
+  if (confidence === 0) {
+    for (const pattern of mediumConfidencePatterns) {
+      const match = message.match(pattern);
+      if (match) {
+        confidence = 80;
+        fileType = detectDocumentType(match[0], message);
+        intent = "create_document";
+        break;
+      }
+    }
+  }
+
+  // ✅ Check contextual patterns with verb analysis
+  if (confidence === 0) {
+    const creationVerbs = [
+      "create",
+      "make",
+      "generate",
+      "write",
+      "draft",
+      "prepare",
+      "build",
+      "design",
+    ];
+    const hasCreationVerb = verbs.some((verb) =>
+      creationVerbs.some((cv) => verb.toLowerCase().includes(cv))
+    );
+
+    const documentNouns = [
+      "document",
+      "file",
+      "letter",
+      "application",
+      "resume",
+      "report",
+      "invoice",
+    ];
+    const hasDocumentNoun = nouns.some((noun) =>
+      documentNouns.some((dn) => noun.toLowerCase().includes(dn))
+    );
+
+    if (hasCreationVerb && hasDocumentNoun) {
+      confidence = 75;
+      fileType = detectDocumentType(message, message);
+      intent = "create_document";
+    } else if (hasCreationVerb) {
+      for (const pattern of contextualPatterns) {
+        if (pattern.test(message)) {
+          confidence = 60;
+          fileType = "docx"; // Default to Word document
+          intent = "possible_create";
+          break;
+        }
+      }
+    }
+  }
+
+  // ✅ NEGATIVE INDICATORS (reduce confidence)
+  const negativePatterns = [
+    /how to (create|make|generate)/i,
+    /what is/i,
+    /explain/i,
+    /tell me about/i,
+    /difference between/i,
+    /compare/i,
+    /analyze/i,
+    /summarize/i,
+    /just (show|display|list)/i,
+  ];
+
+  for (const pattern of negativePatterns) {
+    if (pattern.test(message)) {
+      confidence = Math.max(0, confidence - 30);
+      if (confidence < 50) {
+        intent = "information_request";
+      }
+      break;
+    }
+  }
+
+  return {
+    shouldCreateFile: confidence >= 70, // Threshold for file creation
+    confidence,
+    fileType: fileType || "docx",
+    intent,
+    analysis: {
+      verbs: verbs.slice(0, 3),
+      nouns: nouns.slice(0, 3),
+      hasCreationIntent: confidence >= 70,
+    },
+  };
+}
+
+// ✅ SMART FILE TYPE DETECTION
+function detectFileType(matchedText, fullMessage) {
+  const text = (matchedText + " " + fullMessage).toLowerCase();
+
+  if (/pdf/i.test(text)) return "pdf";
+  if (/excel|xlsx|spreadsheet|sheet/i.test(text)) return "xlsx";
+  if (/word|docx|document/i.test(text)) return "docx";
+  if (/txt|text|plain/i.test(text)) return "txt";
+
+  // Default based on content type
+  if (/table|data|calculation|budget|expense/i.test(text)) return "xlsx";
+  if (/letter|application|resume|report|contract/i.test(text)) return "docx";
+
+  return "docx"; // Default
+}
+
+// ✅ SMART DOCUMENT TYPE DETECTION
+function detectDocumentType(matchedText, fullMessage) {
+  const text = (matchedText + " " + fullMessage).toLowerCase();
+
+  if (/letter|application|resume|cv|report|invoice|contract/i.test(text)) {
+    if (/table|budget|expense|calculation/i.test(text)) return "xlsx";
+    return "docx";
+  }
+
+  return "docx";
+}
 
 // ✅ STANDARDIZED DATABASE QUERY WRAPPER
 const executeQuery = async (sql, params = []) => {
@@ -168,12 +366,11 @@ exports.getConversations = async (req, res) => {
   }
 };
 
-// ✅ FIXED GET CONVERSATION HISTORY WITH OWNERSHIP VALIDATION
+// ✅ UPDATE YOUR getConversationHistory FUNCTION
 exports.getConversationHistory = async (req, res) => {
   const { conversation_id } = req.params;
   const user_id = req.user?.user_id;
 
-  // ✅ VALIDATE INPUTS
   if (!conversation_id || isNaN(conversation_id)) {
     return res.status(400).json({ error: "Valid conversation ID is required" });
   }
@@ -209,9 +406,9 @@ exports.getConversationHistory = async (req, res) => {
       });
     }
 
-    // ✅ FETCH HISTORY ONLY AFTER OWNERSHIP VERIFICATION
+    // ✅ FETCH HISTORY WITH GENERATED FILES INFO
     const history = await executeQuery(
-      `SELECT id, user_message AS message, response, created_at, file_names, file_path, suggestions
+      `SELECT id, user_message AS message, response, created_at, file_names, file_path, file_metadata, suggestions, generated_file_info
        FROM chat_history
        WHERE conversation_id = ?
        ORDER BY created_at ASC`,
@@ -222,32 +419,88 @@ exports.getConversationHistory = async (req, res) => {
       return res.status(200).json({ success: true, history: [] });
     }
 
+    // ✅ GET ALL GENERATED FILES FOR THIS CONVERSATION (Updated query for your table structure)
+    const generatedFiles = await executeQuery(
+      `SELECT filename, file_data, file_metadata, mime_type, file_size, 
+              COALESCE(ftp_path, '') as ftp_path, 
+              COALESCE(download_url, '') as download_url, 
+              created_at
+       FROM generated_files 
+       WHERE conversation_id = ? AND user_id = ?
+       ORDER BY created_at ASC`,
+      [parseInt(conversation_id), user_id]
+    );
+
+    console.log(
+      `📁 Found ${generatedFiles.length} generated files for conversation ${conversation_id}`
+    );
+
     const formattedHistory = history.map((msg) => {
       let files = [];
+      let aiGeneratedFiles = [];
 
-      // ✅ PREFER JSON METADATA OVER LEGACY FORMAT
+      // ✅ HANDLE UPLOADED FILES (existing logic)
       if (msg.file_metadata) {
         try {
           const metadata = JSON.parse(msg.file_metadata);
-          files = metadata.map(file => ({
+          files = metadata.map((file) => ({
             file_path: file.file_path,
-            file_name: file.original_filename || file.display_filename, // ✅ Show original name
-            display_name: sanitizeDisplayName(file.original_filename || file.display_filename),
+            file_name: file.original_filename || file.display_filename,
+            display_name: sanitizeDisplayName(
+              file.original_filename || file.display_filename
+            ),
             unique_filename: file.unique_filename,
             file_size: file.file_size,
             mime_type: file.mime_type,
             type: file.file_path?.split(".").pop() || "file",
             upload_timestamp: file.upload_timestamp,
-            is_secure: true // ✅ Indicates unique filename system
+            is_secure: true,
           }));
         } catch (parseError) {
           console.error("❌ Error parsing file metadata:", parseError);
-          // Fallback to legacy format
           files = parseLegacyFileFormat(msg.file_path, msg.file_names);
         }
       } else {
-        // ✅ LEGACY SUPPORT
         files = parseLegacyFileFormat(msg.file_path, msg.file_names);
+      }
+
+      // ✅ HANDLE AI GENERATED FILES
+      if (msg.generated_files_info) {
+        try {
+          const genFilesInfo = JSON.parse(msg.generated_files_info);
+
+          aiGeneratedFiles = genFilesInfo.map((genFileInfo) => {
+            // Find matching generated file data
+            const matchingGenFile = generatedFiles.find(
+              (gf) =>
+                gf.filename === genFileInfo.filename &&
+                Math.abs(new Date(gf.created_at) - new Date(msg.created_at)) <
+                  300000 // Within 5 minutes
+            );
+
+            return {
+              filename: genFileInfo.filename,
+              file_type: genFileInfo.file_type,
+              mime_type: genFileInfo.mime_type,
+              file_size: genFileInfo.file_size,
+              download_url:
+                genFileInfo.download_url || matchingGenFile?.download_url || "",
+              ftp_path: genFileInfo.ftp_path || matchingGenFile?.ftp_path || "",
+              file_data: matchingGenFile?.file_data, // Base64 data if available
+              generated_at: genFileInfo.generated_at,
+              is_ai_generated: true,
+              download_ready: !!(
+                genFileInfo.download_url || matchingGenFile?.download_url
+              ),
+            };
+          });
+
+          console.log(
+            `📄 AI generated files attached: ${aiGeneratedFiles.length}`
+          );
+        } catch (parseError) {
+          console.error("❌ Error parsing generated files info:", parseError);
+        }
       }
 
       return {
@@ -257,192 +510,71 @@ exports.getConversationHistory = async (req, res) => {
         response: msg.response,
         suggestions: msg.suggestions ? JSON.parse(msg.suggestions) : [],
         files: files.length > 0 ? files : undefined,
+        ai_generated_files:
+          aiGeneratedFiles.length > 0 ? aiGeneratedFiles : undefined,
         created_at: msg.created_at,
       };
     });
 
-    console.log("✅ Retrieved", formattedHistory.length, "messages for conversation:", conversation_id);
+    console.log(
+      "✅ Retrieved",
+      formattedHistory.length,
+      "messages for conversation:",
+      conversation_id
+    );
+    console.log(
+      "📁 Total uploaded files:",
+      formattedHistory.reduce((sum, msg) => sum + (msg.files?.length || 0), 0)
+    );
+    console.log(
+      "🤖 Total AI generated files:",
+      formattedHistory.reduce(
+        (sum, msg) => sum + (msg.ai_generated_files?.length || 0),
+        0
+      )
+    );
 
     return res.status(200).json({
       success: true,
       history: formattedHistory,
       conversation_id: parseInt(conversation_id),
       user_id: user_id,
+      stats: {
+        total_messages: formattedHistory.length,
+        uploaded_files: formattedHistory.reduce(
+          (sum, msg) => sum + (msg.files?.length || 0),
+          0
+        ),
+        ai_generated_files: formattedHistory.reduce(
+          (sum, msg) => sum + (msg.ai_generated_files?.length || 0),
+          0
+        ),
+      },
     });
   } catch (error) {
     console.error("❌ Error fetching conversation history:", error.message);
-    return res.status(500).json({ error: "Failed to retrieve conversation history" });
+    return res
+      .status(500)
+      .json({ error: "Failed to retrieve conversation history" });
   }
 };
-// ✅ FIXED GET CONVERSATION HISTORY WITH OWNERSHIP VALIDATION
-// exports.getConversationHistory = async (req, res) => {
-//   const { conversation_id } = req.params;
-//   const user_id = req.user?.user_id;
-
-//   // ✅ VALIDATE INPUTS
-//   if (!conversation_id || isNaN(conversation_id)) {
-//     return res.status(400).json({ error: "Valid conversation ID is required" });
-//   }
-
-//   if (!user_id || isNaN(user_id)) {
-//     console.error("❌ Invalid user_id in getConversationHistory:", user_id);
-//     return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
-//   }
-
-//   console.log("🔍 Fetching history for conversation:", conversation_id, "user:", user_id);
-
-//   try {
-//     // ✅ VERIFY CONVERSATION OWNERSHIP FIRST
-//     const ownershipCheck = await executeQuery(
-//       "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
-//       [parseInt(conversation_id), user_id]
-//     );
-
-//     if (!ownershipCheck || ownershipCheck.length === 0) {
-//       console.error("❌ Unauthorized access attempt - conversation:", conversation_id, "user:", user_id);
-//       return res.status(403).json({
-//         error: "Unauthorized: Conversation does not belong to user",
-//       });
-//     }
-
-//     // ✅ FETCH HISTORY WITH ALL FILE COLUMNS
-//     const history = await executeQuery(
-//       `SELECT id, user_message AS message, response, created_at, file_names, file_path, file_metadata, suggestions
-//        FROM chat_history
-//        WHERE conversation_id = ?
-//        ORDER BY created_at ASC`,
-//       [parseInt(conversation_id)]
-//     );
-
-//     if (!history || history.length === 0) {
-//       return res.status(200).json({ success: true, history: [] });
-//     }
-
-//     // ✅ ALSO GET ALL FILES FROM uploaded_files TABLE FOR THIS CONVERSATION
-//     const allUploadedFiles = await executeQuery(
-//       `SELECT file_path, file_metadata, created_at 
-//        FROM uploaded_files 
-//        WHERE conversation_id = ? AND user_id = ? 
-//        AND (status = 'confirmed' OR status IS NULL)
-//        ORDER BY created_at ASC`,
-//       [parseInt(conversation_id), user_id]
-//     );
-
-//     console.log(`📁 Found ${allUploadedFiles.length} uploaded files for conversation ${conversation_id}`);
-
-//     const formattedHistory = history.map((msg) => {
-//       let files = [];
-
-//       // ✅ METHOD 1: Try to get files from chat_history file_metadata
-//       if (msg.file_metadata) {
-//         try {
-//           const metadataArray = JSON.parse(msg.file_metadata);
-//           if (Array.isArray(metadataArray)) {
-//             files = metadataArray.map(metadataStr => {
-//               try {
-//                 const metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr;
-//                 return {
-//                   file_path: metadata.file_path,
-//                   file_name: metadata.original_filename || metadata.display_filename,
-//                   display_name: sanitizeDisplayName(metadata.original_filename || metadata.display_filename),
-//                   unique_filename: metadata.unique_filename,
-//                   file_size: metadata.file_size,
-//                   mime_type: metadata.mime_type,
-//                   type: metadata.file_path?.split(".").pop() || "file",
-//                   upload_timestamp: metadata.upload_timestamp,
-//                   is_secure: true
-//                 };
-//               } catch (innerParseError) {
-//                 console.error("❌ Error parsing inner metadata:", innerParseError);
-//                 return null;
-//               }
-//             }).filter(Boolean);
-//           }
-//         } catch (parseError) {
-//           console.error("❌ Error parsing file_metadata from chat_history:", parseError);
-//         }
-//       }
-
-//       // ✅ METHOD 2: If no files from chat_history, try legacy format
-//       if (files.length === 0 && (msg.file_path || msg.file_names)) {
-//         files = parseLegacyFileFormat(msg.file_path, msg.file_names);
-//       }
-
-//       // ✅ METHOD 3: If still no files, match by timestamp from uploaded_files table
-//       if (files.length === 0 && allUploadedFiles.length > 0) {
-//         const messageTime = new Date(msg.created_at);
-//         const matchingFiles = allUploadedFiles.filter(file => {
-//           const fileTime = new Date(file.created_at);
-//           const timeDiff = Math.abs(messageTime - fileTime);
-//           return timeDiff <= 120000; // Within 2 minutes
-//         });
-
-//         if (matchingFiles.length > 0) {
-//           files = matchingFiles.map(file => {
-//             try {
-//               const metadata = JSON.parse(file.file_metadata);
-//               return {
-//                 file_path: metadata.file_path,
-//                 file_name: metadata.original_filename || metadata.display_filename,
-//                 display_name: sanitizeDisplayName(metadata.original_filename || metadata.display_filename),
-//                 unique_filename: metadata.unique_filename,
-//                 file_size: metadata.file_size,
-//                 mime_type: metadata.mime_type,
-//                 type: metadata.file_path?.split(".").pop() || "file",
-//                 upload_timestamp: metadata.upload_timestamp,
-//                 is_secure: true
-//               };
-//             } catch (parseError) {
-//               console.error("❌ Error parsing uploaded file metadata:", parseError);
-//               return null;
-//             }
-//           }).filter(Boolean);
-//         }
-//       }
-
-//       console.log(`📄 Message ${msg.id}: Found ${files.length} files`);
-
-//       return {
-//         id: msg.id,
-//         sender: "user",
-//         message: msg.message,
-//         response: msg.response,
-//         suggestions: msg.suggestions ? JSON.parse(msg.suggestions) : [],
-//         files: files.length > 0 ? files : undefined,
-//         created_at: msg.created_at,
-//       };
-//     });
-
-//     console.log("✅ Retrieved", formattedHistory.length, "messages for conversation:", conversation_id);
-//     console.log("📁 Total files across all messages:", formattedHistory.reduce((sum, msg) => sum + (msg.files?.length || 0), 0));
-
-//     return res.status(200).json({
-//       success: true,
-//       history: formattedHistory,
-//       conversation_id: parseInt(conversation_id),
-//       user_id: user_id,
-//     });
-//   } catch (error) {
-//     console.error("❌ Error fetching conversation history:", error.message);
-//     return res.status(500).json({ error: "Failed to retrieve conversation history" });
-//   }
-// };
-
-
 // ✅ HELPER FUNCTION FOR LEGACY FILE FORMAT
+
 function parseLegacyFileFormat(filePaths, fileNames) {
   if (!filePaths && !fileNames) return [];
-  
+
   const paths = filePaths ? filePaths.split(",") : [];
   const names = fileNames ? fileNames.split(",") : [];
 
   return paths.map((path, index) => ({
     file_path: path.trim(),
     file_name: names[index]?.trim() || `file-${index + 1}`,
-    display_name: sanitizeDisplayName(names[index]?.trim() || `file-${index + 1}`),
+    display_name: sanitizeDisplayName(
+      names[index]?.trim() || `file-${index + 1}`
+    ),
     type: path.split(".").pop() || "file",
     legacy_format: true,
-    is_secure: false // ✅ Legacy files may not be secure
+    is_secure: false, // ✅ Legacy files may not be secure
   }));
 }
 
@@ -538,12 +670,783 @@ exports.getChatHistory = async (req, res) => {
   }
 };
 
+// ✅ IMPROVED formatLikeChatGPT FUNCTION
+function formatLikeChatGPT(content) {
+  if (!content) return "";
+
+  let formatted = content;
+
+  // ✅ SKIP FORMATTING IF CONTENT CONTAINS ESCAPED HTML
+  const hasEscapedHtml = /&lt;|&gt;|&amp;/.test(content);
+  
+  if (hasEscapedHtml) {
+    // ✅ For escaped HTML content, just return as-is
+    return formatted;
+  }
+
+  // ✅ APPLY FORMATTING ONLY FOR NON-HTML CONTENT
+  formatted = formatted
+    // ✅ ENHANCED FORMATTING FOR BETTER READABILITY
+    .replace(/\*\*(.*?)\*\*/g, "**$1**") // Keep bold
+    .replace(/\*(.*?)\*/g, "*$1*") // Keep italic
+    .replace(/`(.*?)`/g, "`$1`") // Keep code
+
+    // ✅ SMART KEYWORD HIGHLIGHTING
+    .replace(/\b(IMPORTANT|CRITICAL|NOTE|WARNING|ALERT)\b:/gi, "⚠️ **$1:**")
+    .replace(/\b(TIP|PRO TIP|ADVICE|SUGGESTION)\b:/gi, "💡 **$1:**")
+    .replace(/\b(EXAMPLE|SAMPLE|TEMPLATE)\b:/gi, "📝 **$1:**")
+    .replace(/\b(SUMMARY|CONCLUSION|RESULT)\b:/gi, "📊 **$1:**")
+
+    // ✅ LIST FORMATTING
+    .replace(/^(\d+)\.\s/gm, "**$1.** ")
+    .replace(/^[-•*]\s/gm, "• ")
+
+    // ✅ HEADER FORMATTING (for complete lines only)
+    .replace(/^#{1}\s(.*?)$/gm, "\n## **$1**\n")
+    .replace(/^#{2}\s(.*?)$/gm, "\n### **$1**\n")
+    .replace(/^#{3}\s(.*?)$/gm, "\n#### **$1**\n");
+
+  return formatted;
+}
+
+
+
+ 
+// ✅ ENHANCED: Helper function to escape HTML content
+function escapeHtmlContent(content) {
+  if (!content) return "";
+  
+  // ✅ Always escape HTML characters to prevent rendering as HTML
+  return content
+    .replace(/&/g, '&amp;')      // Must be first
+    .replace(/</g, '&lt;')       // Escape opening tags
+    .replace(/>/g, '&gt;')       // Escape closing tags
+    .replace(/"/g, '&quot;')     // Escape quotes in attributes
+    .replace(/'/g, '&#39;');     // Escape single quotes
+}
+
+
+ 
+
+// exports.askChatbot = async (req, res) => {
+//  console.log("✅ Received request at /chat:", req.body);
+
+//   let { userMessage, conversation_id, extracted_summary, _file_upload_ids } =
+//     req.body;
+//   const user_id = req.user?.user_id;
+
+//   // ✅ STRICT USER VALIDATION
+//   if (!user_id || isNaN(user_id)) {
+//     console.error("❌ Invalid user_id in askChatbot:", user_id);
+//     return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
+//   }
+
+//   if (!userMessage || userMessage.trim().length === 0) {
+//     return res.status(400).json({
+//       error: "User message cannot be empty",
+//     });
+//   }
+
+//   console.log(
+//     `🔍 Processing chat for user_id: ${user_id}, conversation: ${conversation_id}`
+//   );
+
+//   try {
+//     // Set headers for streaming
+//     res.writeHead(200, {
+//       "Content-Type": "text/plain; charset=utf-8",
+//       "Transfer-Encoding": "chunked",
+//       "Cache-Control": "no-cache",
+//       Connection: "keep-alive",
+//       "Access-Control-Allow-Origin": "*",
+//       "Access-Control-Allow-Headers": "Cache-Control",
+//     });
+
+//     // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED
+//     if (conversation_id && !isNaN(conversation_id)) {
+//       try {
+//         const ownershipCheck = await executeQuery(
+//           "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
+//           [conversation_id, user_id]
+//         );
+
+//         if (!ownershipCheck || ownershipCheck.length === 0) {
+//           console.error("❌ Unauthorized conversation access");
+//           await rollbackPendingFiles(_file_upload_ids);
+//           res.write(
+//             JSON.stringify({
+//               type: "error",
+//               error: "Unauthorized: Conversation does not belong to user",
+//             }) + "\n"
+//           );
+//           res.end();
+//           return;
+//         }
+//         console.log("✅ Conversation ownership verified");
+//       } catch (ownershipError) {
+//         console.error("❌ Ownership check failed:", ownershipError);
+//         res.write(
+//           JSON.stringify({
+//             type: "error",
+//             error: "Database error during ownership verification",
+//           }) + "\n"
+//         );
+//         res.end();
+//         return;
+//       }
+//     }
+
+//     // 🚀 IMMEDIATE PARALLEL PROCESSING WITH PERFORMANCE TRACKING
+//     const startTime = Date.now();
+
+//     // ✅ SMART FILE ANALYSIS (with caching)
+//     const fileAnalysisStart = Date.now();
+//     const fileAnalysis = getCachedFileAnalysis(userMessage);
+//     logAIPerformance(fileAnalysisStart, "Smart File Analysis", {
+//       confidence: fileAnalysis.confidence,
+//       shouldCreate: fileAnalysis.shouldCreateFile,
+//       intent: fileAnalysis.intent,
+//     });
+
+//     console.log("🔄 Starting parallel processing...");
+
+//     // ✅ FIXED: Add proper error handling for each promise
+//     let contextResult, fileContextResult, urlResult;
+
+//     try {
+//       // Task 1: URL Processing
+//       console.log("🔗 Starting URL processing...");
+//       const urlProcessingPromise = processUrlsOptimized(userMessage, res).catch(error => {
+//         console.error("❌ URL processing failed:", error);
+//         return { urlData: [], urlContent: "", processedUrls: [], fullUserMessage: userMessage };
+//       });
+
+//       // Task 2: Context Retrieval
+//       console.log("📚 Starting context retrieval...");
+//       const contextPromise = getConversationContextOptimized(
+//         conversation_id,
+//         user_id
+//       ).catch(error => {
+//         console.error("❌ Context retrieval failed:", error);
+//         return { summaryContext: "", shouldRename: false, newConversationName: null };
+//       });
+
+//       // Task 3: File context
+//       console.log("📄 Starting file context retrieval...");
+//       const fileContextPromise = getFileContextBasedOnUpload(
+//         conversation_id,
+//         user_id,
+//         extracted_summary,
+//         userMessage
+//       ).catch(error => {
+//         console.error("❌ File context retrieval failed:", error);
+//         return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+//       });
+
+//       // Task 4: Generate suggestions
+//       console.log("💡 Starting suggestions generation...");
+//       const suggestionPromise = generateFastSuggestions(userMessage).catch(error => {
+//         console.error("❌ Suggestions generation failed:", error);
+//         return [];
+//       });
+
+//       // ⚡ Get context immediately with proper error handling
+//       console.log("⏳ Waiting for parallel tasks to complete...");
+//       [contextResult, fileContextResult, urlResult] = await Promise.all([
+//         contextPromise,
+//         fileContextPromise,
+//         urlProcessingPromise,
+//       ]);
+
+//       console.log("✅ Parallel processing completed successfully");
+//       console.log("📊 Context result:", !!contextResult);
+//       console.log("📊 File context result:", !!fileContextResult);
+//       console.log("📊 URL result:", !!urlResult);
+
+//     } catch (parallelError) {
+//       console.error("❌ Parallel processing failed:", parallelError);
+      
+//       // Provide fallback values
+//       contextResult = { summaryContext: "", shouldRename: false, newConversationName: null };
+//       fileContextResult = { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+//       urlResult = { urlData: [], urlContent: "", processedUrls: [], fullUserMessage: userMessage };
+//     }
+
+//     const { summaryContext, shouldRename, newConversationName } = contextResult;
+//     const {
+//       fileContext = "",
+//       fileNames = [],
+//       fileCount = 0,
+//       contextType = "none",
+//     } = fileContextResult || {};
+
+//     const { urlData, urlContent, processedUrls, fullUserMessage } = urlResult;
+
+//     console.log("🔄 Getting suggestions...");
+//     let suggestions = [];
+//     try {
+//       suggestions = await generateFastSuggestions(userMessage);
+//       console.log("✅ Suggestions generated:", suggestions.length);
+//     } catch (suggestionError) {
+//       console.error("❌ Suggestions failed:", suggestionError);
+//       suggestions = [];
+//     }
+
+//     console.log(`⚡ Context loaded in ${Date.now() - startTime}ms`);
+
+//     // 🧠 GET USER INFO FOR PERSONALIZED RESPONSES
+//     let userInfo = null;
+//     try {
+//       const userResult = await executeQuery(
+//         "SELECT username FROM users WHERE id = ?",
+//         [user_id]
+//       );
+//       if (userResult && userResult.length > 0) {
+//         userInfo = { username: userResult[0].username };
+//         console.log("✅ User info loaded:", userInfo.username);
+//       }
+//     } catch (userError) {
+//       console.log(
+//         "⚠️ Could not fetch user info for personalization:",
+//         userError.message
+//       );
+//     }
+
+//     // 🧠 BUILD ENHANCED AI MESSAGES WITH SMART FILE DETECTION
+//     console.log("🧠 Building AI messages...");
+//     const messagesBuildStart = Date.now();
+//     const finalMessages = buildAIMessagesWithSmartContext(
+//       summaryContext,
+//       extracted_summary,
+//       fullUserMessage,
+//       userInfo,
+//       fileNames,
+//       fileContext,
+//       contextType,
+//       urlContent
+//     );
+//     logAIPerformance(messagesBuildStart, "AI Messages Build", {
+//       messagesCount: finalMessages.length,
+//       fileDetected: fileAnalysis.shouldCreateFile,
+//     });
+
+//     console.log("🤖 Starting AI model selection and response...");
+
+//     // 🚀 SMART MODEL SELECTION & AI RESPONSE STREAM
+//     let aiResponse = "";
+//     let rawAiResponse = "";
+//     const aiStartTime = Date.now();
+
+//     const modelSelection = await selectOptimalModel(finalMessages);
+//     const selectedModel = modelSelection.model;
+
+//     console.log(
+//       `🤖 Selected Model: ${selectedModel.toUpperCase()} | Tokens: ${
+//         modelSelection.tokenCount
+//       } | File Creation: ${fileAnalysis.shouldCreateFile ? "YES" : "NO"}`
+//     );
+
+//     let stream;
+
+//     try {
+//       console.log("🚀 Creating AI stream...");
+      
+//       if (selectedModel === "deepseek") {
+//         stream = await deepseek.chat.completions.create({
+//           model: "deepseek-chat",
+//           messages: finalMessages,
+//           temperature: fileAnalysis.shouldCreateFile ? 0.3 : 0.7,
+//           max_tokens: fileAnalysis.shouldCreateFile ? 3000 : 2000,
+//           stream: true,
+//         });
+//       } else {
+//         stream = await llama.chat.completions.create({
+//           messages: finalMessages,
+//           temperature: fileAnalysis.shouldCreateFile ? 0.3 : 0.7,
+//           max_tokens: fileAnalysis.shouldCreateFile ? 3000 : 2000,
+//           stream: true,
+//         });
+//       }
+
+//       console.log("✅ AI stream created successfully");
+
+//     } catch (modelError) {
+//       console.error(
+//         `❌ ${selectedModel.toUpperCase()} API failed:`,
+//         modelError.message
+//       );
+
+//       if (
+//         _file_upload_ids &&
+//         Array.isArray(_file_upload_ids) &&
+//         _file_upload_ids.length > 0
+//       ) {
+//         try {
+//           await rollbackPendingFiles(_file_upload_ids);
+//           console.log(
+//             `🔄 Rolled back ${_file_upload_ids.length} pending files`
+//           );
+//         } catch (rollbackError) {
+//           console.error("❌ Failed to rollback files:", rollbackError);
+//         }
+//       }
+
+//       try {
+//         console.log("📤 Sending error message to frontend...");
+//         res.write(
+//           JSON.stringify({
+//             type: "error",
+//             error:
+//               "I'm unable to process your request at the moment. Please try again in a few minutes.",
+//             timestamp: new Date().toISOString(),
+//           }) + "\n"
+//         );
+//         res.end();
+//         console.log("✅ Error message sent to frontend");
+//       } catch (responseError) {
+//         console.error("❌ Failed to send error response:", responseError);
+//       }
+
+//       return;
+//     }
+
+//     console.log("✅ Model API call successful, starting stream...");
+//     try {
+//       // Send initial metadata immediately with file analysis
+//       res.write(
+//         JSON.stringify({
+//           type: "start",
+//           conversation_id,
+//           conversation_name: shouldRename
+//             ? "Generating title..."
+//             : newConversationName,
+//           conversation_renamed: shouldRename,
+//           file_creation_mode: fileAnalysis.shouldCreateFile,
+//           file_analysis: {
+//             confidence: fileAnalysis.confidence,
+//             intent: fileAnalysis.intent,
+//             expected_file_type: fileAnalysis.fileType,
+//           },
+//           context: {
+//             document_available: !!extracted_summary,
+//             conversation_context_available: !!summaryContext,
+//             uploaded_files_available: fileCount > 0,
+//             uploaded_files_count: fileCount,
+//             uploaded_file_names: fileNames,
+//             file_context_type: contextType,
+//           },
+//           processing_time: Date.now() - startTime,
+//         }) + "\n"
+//       );
+
+//       console.log(
+//         `🚀 AI stream started with ${selectedModel.toUpperCase()} in ${
+//           Date.now() - aiStartTime
+//         }ms`
+//       );
+
+//       // ✅ ENHANCED STREAMING WITH PROPER CREATE_FILE HANDLING
+// let isInFileCreation = false;
+// let fileCreationBuffer = "";
+// let completeCreateFileContent = "";
+
+// // for await (const chunk of stream) {
+// //   if (chunk.choices && chunk.choices.length > 0) {
+// //     const content = chunk.choices[0].delta?.content || "";
+// //     if (content) {
+// //       rawAiResponse += content;
+      
+// //       // ✅ DETECT CREATE_FILE START
+// //       if (content.includes('[CREATE_FILE:') && !isInFileCreation) {
+// //         isInFileCreation = true;
+// //         fileCreationBuffer = content;
+// //         completeCreateFileContent = content;
+        
+// //         // Extract file info and send header
+// //         const match = content.match(/\[CREATE_FILE:([^:]+):([^:]+):/);
+// //         if (match) {
+// //           const [, fileType, fileName] = match;
+// //           const markdownHeader = `\n\n## 🎯 Creating ${fileType.toUpperCase()} Document: "${fileName.replace(/_/g, ' ')}"\n\n---\n\n`;
+          
+// //           aiResponse += markdownHeader;
+// //           res.write(JSON.stringify({
+// //             type: "content",
+// //             content: markdownHeader,
+// //           }) + "\n");
+// //         }
+        
+// //         continue; // Don't process content yet, wait for complete content
+// //       }
+      
+// //       // ✅ COLLECT ALL CONTENT DURING FILE CREATION
+// //       if (isInFileCreation) {
+// //         completeCreateFileContent += content;
+// //         fileCreationBuffer += content;
+        
+// //         // ✅ CHECK IF FILE CREATION IS COMPLETE
+// //         if (content.includes(']')) {
+// //           isInFileCreation = false;
+          
+// //           // ✅ EXTRACT COMPLETE CONTENT AND FORMAT IT PROPERLY
+// //           const completeMatch = completeCreateFileContent.match(/\[CREATE_FILE:([^:]+):([^:]+):([\s\S]*?)\]/);
+// //           if (completeMatch) {
+// //             const [, fileType, fileName, fileContent] = completeMatch;
+            
+// //             console.log(`📝 COMPLETE Content length: ${fileContent.length} chars`);
+// //             console.log(`📄 Raw content with \\n: ${fileContent.substring(0, 200)}`);
+            
+// //             // ✅ FIXED: Convert \n to actual newlines for display (this is the key fix)
+// //             const displayFormattedContent = fileContent
+// //               .replace(/\\n/g, '\n')       // Convert \n to actual newlines
+// //               .replace(/\\t/g, '    ')     // Convert \t to spaces
+// //               .replace(/\\\"/g, '"')       // Convert \" to "
+// //               .replace(/\\\'/g, "'")       // Convert \' to '
+// //               .trim();
+            
+// //             console.log(`📄 After newline conversion: ${displayFormattedContent.substring(0, 200)}`);
+            
+// //             // Stream the content with actual newlines
+// //             aiResponse += displayFormattedContent;
+// //             res.write(JSON.stringify({
+// //               type: "content",
+// //               content: displayFormattedContent,
+// //             }) + "\n");
+            
+// //             // Send completion message
+// //             const completionMarkdown = "\n\n---\n\n✅ **Document Generated Successfully!**\n\n";
+// //             aiResponse += completionMarkdown;
+// //             res.write(JSON.stringify({
+// //               type: "content",
+// //               content: completionMarkdown,
+// //             }) + "\n");
+// //           }
+          
+// //           // Reset buffers
+// //           fileCreationBuffer = "";
+// //           completeCreateFileContent = "";
+// //         }
+        
+// //         continue; // Don't process individual chunks during file creation
+// //       }
+      
+// //       // ✅ NORMAL CONTENT PROCESSING (this works fine)
+// //       let displayContent = formatLikeChatGPT(content);
+// //       aiResponse += displayContent;
+      
+// //       res.write(JSON.stringify({
+// //         type: "content",
+// //         content: displayContent,
+// //       }) + "\n");
+// //     }
+// //   }
+// // }
+// // ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
+// for await (const chunk of stream) {
+//   if (chunk.choices && chunk.choices.length > 0) {
+//     const content = chunk.choices[0].delta?.content || "";
+//     if (content) {
+//       rawAiResponse += content;
+      
+//       // ✅ CONVERT \n TO ACTUAL NEWLINES AND ESCAPE HTML
+//       let displayContent = content
+//         .replace(/\\n/g, '\n')       // Convert \n to actual newlines
+//         .replace(/\\t/g, '    ')     // Convert \t to spaces
+//         .replace(/\\\"/g, '"')       // Convert \" to quotes
+//         .replace(/\\\'/g, "'");      // Convert \' to apostrophes
+      
+//       // ✅ ESCAPE HTML CONTENT TO PREVENT RENDERING
+//       displayContent = escapeHtmlContent(displayContent);
+      
+//       // ✅ APPLY ADDITIONAL FORMATTING
+//       displayContent = formatLikeChatGPT(displayContent);
+      
+//       aiResponse += displayContent;
+      
+//       res.write(JSON.stringify({
+//         type: "content",
+//         content: displayContent,
+//       }) + "\n");
+//     }
+//   }
+// }
+
+
+
+//       logAIPerformance(aiStartTime, "AI Response Stream", {
+//         model: selectedModel,
+//         responseLength: aiResponse.length,
+//         fileCreationMode: fileAnalysis.shouldCreateFile,
+//       });
+
+//       // ✅ PROCESS FILES USING RAW RESPONSE
+//       let generatedFiles = [];
+//       let finalAiResponse = aiResponse;
+
+//       try {
+//         console.log(
+//           `🤖 Checking raw AI response for file generation requests...`
+//         );
+
+//         if (rawAiResponse.includes("[CREATE_FILE:")) {
+//           const fileGenStart = Date.now();
+
+//           res.write(
+//             JSON.stringify({
+//               type: "file_generation",
+//               status: "processing",
+//               message: "⚡ Processing your document...",
+//             }) + "\n"
+//           );
+
+//           const fileGenerationResult = await handleAIFileGeneration(
+//             rawAiResponse,
+//             conversation_id,
+//             user_id,
+//             res
+//           );
+
+//           logAIPerformance(fileGenStart, "File Generation", {
+//             filesCreated: fileGenerationResult.generatedFiles?.length || 0,
+//           });
+
+//           if (fileGenerationResult.hasGeneratedFiles) {
+//             generatedFiles = fileGenerationResult.generatedFiles;
+
+//             // Add professional download links
+//             generatedFiles.forEach((file) => {
+//               const downloadLink = `\n\n📄 **${
+//                 file.originalFilename || file.filename
+//               }.${
+//                 file.fileType
+//               }** - Professional document ready!\n🔗 [**Download ${
+//                 file.originalFilename || file.filename
+//               }**](${file.downloadUrl})\n*File size: ${(
+//                 file.size / 1024
+//               ).toFixed(1)} KB*\n`;
+
+//               res.write(
+//                 JSON.stringify({
+//                   type: "content",
+//                   content: downloadLink,
+//                 }) + "\n"
+//               );
+//             });
+
+//             console.log(
+//               `✅ AI generated ${generatedFiles.length} file(s) successfully`
+//             );
+//           }
+
+//           // Send completion event
+//           res.write(
+//             JSON.stringify({
+//               type: "file_created",
+//               status: "completed",
+//               files_count: generatedFiles.length,
+//               message:
+//                 generatedFiles.length > 0
+//                   ? "🎉 Documents created successfully!"
+//                   : "⚠️ No files were created",
+//             }) + "\n"
+//           );
+//         }
+//         // ✅ APPLY COMPLETE FORMATTING AT THE END
+//         // const finalFormattedResponse = formatLikeChatGPT(finalAiResponse, true);
+//       } catch (fileError) {
+//         console.error("❌ AI file generation failed:", fileError);
+
+//         res.write(
+//           JSON.stringify({
+//             type: "file_error",
+//             error: "File creation failed",
+//             message: fileError.message,
+//           }) + "\n"
+//         );
+//       }
+
+//       // 🚀 HANDLE RENAME RESULT
+//       let finalConversationName = newConversationName;
+//       if (shouldRename) {
+//         try {
+//           const renameResult = await executeRename(
+//             conversation_id,
+//             userMessage,
+//             user_id
+//           );
+//           if (renameResult.success) {
+//             finalConversationName = renameResult.title;
+//             res.write(
+//               JSON.stringify({
+//                 type: "conversation_renamed",
+//                 conversation_id: conversation_id,
+//                 new_name: finalConversationName,
+//                 success: true,
+//               }) + "\n"
+//             );
+//           }
+//         } catch (renameError) {
+//           console.error("❌ Rename failed:", renameError);
+//         }
+//       }
+
+//       // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
+//       // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
+//       if (
+//         _file_upload_ids &&
+//         Array.isArray(_file_upload_ids) &&
+//         _file_upload_ids.length > 0
+//       ) {
+//         try {
+//           await confirmPendingFiles(_file_upload_ids);
+//           console.log(
+//             `✅ Confirmed ${_file_upload_ids.length} files after successful AI response`
+//           );
+//         } catch (confirmError) {
+//           console.error("❌ Failed to confirm files:", confirmError);
+//         }
+//       }
+
+//       // Send final data with enhanced information
+//       res.write(
+//         JSON.stringify({
+//           type: "end",
+//           suggestions: suggestions,
+//           full_response: finalAiResponse,
+//           processed_urls: urlData.map((data) => ({
+//             url: data.url,
+//             title: data.title,
+//             success: !data.error,
+//             error: data.error,
+//             site_type: data.metadata?.siteType,
+//             content_length: data.content?.length || 0,
+//           })),
+//           // ✅ ENHANCED: Send generated files with professional info
+//           generated_files: generatedFiles.map((file) => ({
+//             filename: file.originalFilename || file.filename,
+//             actual_filename: file.filename,
+//             type: file.fileType,
+//             size: file.size,
+//             size_formatted: `${(file.size / 1024).toFixed(1)} KB`,
+//             download_url: file.downloadUrl,
+//             ai_generated: true,
+//             created_at: new Date().toISOString(),
+//             professional: true,
+//           })),
+//           // ✅ ENHANCED CONTEXT INFO
+//           context: {
+//             document_available: !!extracted_summary,
+//             conversation_context_available: !!summaryContext,
+//             url_content_available: !!urlContent,
+//             urls_processed: urlData.length,
+//             uploaded_files_available: fileCount > 0,
+//             uploaded_files_count: fileCount,
+//             file_context_type: contextType,
+//             files_generated: generatedFiles.length,
+//             ai_analysis: {
+//               file_creation_detected: fileAnalysis.shouldCreateFile,
+//               confidence: fileAnalysis.confidence,
+//               intent: fileAnalysis.intent,
+//               model_used: selectedModel,
+//             },
+//           },
+//           performance: {
+//             total_processing_time: Date.now() - startTime,
+//             ai_response_time: Date.now() - aiStartTime,
+//             files_created: generatedFiles.length,
+//             model_used: selectedModel.toUpperCase(),
+//           },
+//         }) + "\n"
+//       );
+
+//       res.end();
+
+//       // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
+//       process.nextTick(() => {
+//         // ✅ ENSURE finalAiResponse includes download links
+//         let responseWithLinks = aiResponse;
+
+//         if (generatedFiles && generatedFiles.length > 0) {
+//           generatedFiles.forEach((file) => {
+//             const downloadLink = `\n\n📄 **${
+//               file.originalFilename || file.filename
+//             }.${
+//               file.fileType
+//             }** - Professional document ready!\n🔗 [**Download ${
+//               file.originalFilename || file.filename
+//             }**](${file.downloadUrl})\n*File size: ${(file.size / 1024).toFixed(
+//               1
+//             )} KB*\n`;
+//             responseWithLinks += downloadLink;
+//           });
+//         }
+
+//         handleAllBackgroundTasksOptimizedWithFiles(
+//           conversation_id,
+//           fullUserMessage,
+//           responseWithLinks,
+//           extracted_summary,
+//           suggestions,
+//           user_id,
+//           shouldRename,
+//           finalConversationName,
+//           processedUrls,
+//           urlData,
+//           urlContent,
+//           fileContext,
+//           _file_upload_ids,
+//           generatedFiles
+//         );
+//       });
+//     } catch (streamError) {
+//       console.error("❌ Streaming error:", streamError);
+
+//       if (
+//         _file_upload_ids &&
+//         Array.isArray(_file_upload_ids) &&
+//         _file_upload_ids.length > 0
+//       ) {
+//         try {
+//           await rollbackPendingFiles(_file_upload_ids);
+//         } catch (rollbackError) {
+//           console.error("❌ Failed to rollback files:", rollbackError);
+//         }
+//       }
+
+//       if (!res.headersSent) {
+//         try {
+//           res.write(
+//             JSON.stringify({
+//               type: "error",
+//               error:
+//                 "I'm unable to process your request at the moment. Please try again in a few minutes.",
+//             }) + "\n"
+//           );
+//           res.end();
+//         } catch (responseError) {
+//           console.error(
+//             "❌ Failed to send streaming error response:",
+//             responseError
+//           );
+//         }
+//       }
+//     }
+//   } catch (error) {
+//     console.error("❌ Chat controller error:", error.message);
+//      console.error("❌ Full error:", error);
+//     await rollbackPendingFiles(_file_upload_ids);
+
+//     if (!res.headersSent) {
+//       res.status(500).json({ error: "Internal server error" });
+//     }
+//   }
+// };
+
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
-  let { userMessage, conversation_id, extracted_summary, _file_upload_ids } = req.body;
+  let { userMessage, conversation_id, extracted_summary, _file_upload_ids } =
+    req.body;
   const user_id = req.user?.user_id;
-  // const uploadedFiles = req.body.uploaded_file_metadata || [];
 
   // ✅ STRICT USER VALIDATION
   if (!user_id || isNaN(user_id)) {
@@ -551,18 +1454,15 @@ exports.askChatbot = async (req, res) => {
     return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
   }
 
-  if (!userMessage && !extracted_summary) {
-    return res.status(400).json({
-      error: "User message or extracted summary is required",
-    });
-  }
-  // ✅ ENSURE USER MESSAGE EXISTS (even if no files)
   if (!userMessage || userMessage.trim().length === 0) {
     return res.status(400).json({
       error: "User message cannot be empty",
     });
   }
-  console.log("🔍 Processing chat for user_id:", user_id, "conversation:", conversation_id);
+
+  console.log(
+    `🔍 Processing chat for user_id: ${user_id}, conversation: ${conversation_id}`
+  );
 
   try {
     // Set headers for streaming
@@ -575,416 +1475,1196 @@ exports.askChatbot = async (req, res) => {
       "Access-Control-Allow-Headers": "Cache-Control",
     });
 
-    // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED (Quick check)
+    // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED
     if (conversation_id && !isNaN(conversation_id)) {
-      const ownershipCheck = await executeQuery(
-        "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
-        [conversation_id, user_id]
-      );
+      try {
+        const ownershipCheck = await executeQuery(
+          "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
+          [conversation_id, user_id]
+        );
 
-      if (!ownershipCheck || ownershipCheck.length === 0) {
-        console.error("❌ Unauthorized conversation access");
-
-           // ✅ ROLLBACK FILES IF UNAUTHORIZED
-        await rollbackPendingFiles(_file_upload_ids);
-
-        res.write(JSON.stringify({
-          type: "error",
-          error: "Unauthorized: Conversation does not belong to user",
-        }) + "\n");
+        if (!ownershipCheck || ownershipCheck.length === 0) {
+          console.error("❌ Unauthorized conversation access");
+          await rollbackPendingFiles(_file_upload_ids);
+          res.write(
+            JSON.stringify({
+              type: "error",
+              error: "Unauthorized: Conversation does not belong to user",
+            }) + "\n"
+          );
+          res.end();
+          return;
+        }
+        console.log("✅ Conversation ownership verified");
+      } catch (ownershipError) {
+        console.error("❌ Ownership check failed:", ownershipError);
+        res.write(
+          JSON.stringify({
+            type: "error",
+            error: "Database error during ownership verification",
+          }) + "\n"
+        );
         res.end();
         return;
       }
     }
 
-    // 🚀 IMMEDIATE PARALLEL PROCESSING - Start all tasks simultaneously
+    // 🚀 IMMEDIATE PARALLEL PROCESSING WITH PERFORMANCE TRACKING
     const startTime = Date.now();
-    
-    // Task 1: URL Processing (Non-blocking)
-    const urlProcessingPromise = processUrlsOptimized(userMessage, res);
-    
-    // Task 2: Context Retrieval (Optimized single query)
-    const contextPromise = getConversationContextOptimized(conversation_id, user_id);
-    
-    // Task 3: Get file context based on whether there's a new upload
-const fileContextPromise = getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage);   
-    // Task 4: Generate suggestions
-    const suggestionPromise = generateFastSuggestions(userMessage);
 
-    // ⚡ Get context immediately
-    const [contextResult, fileContextResult, urlResult] = await Promise.all([
-      contextPromise,
-      fileContextPromise,
-      urlProcessingPromise // ✅ Wait for URL processing
-    ]);
+    // ✅ SMART FILE ANALYSIS (with caching)
+    const fileAnalysisStart = Date.now();
+    const fileAnalysis = getCachedFileAnalysis(userMessage);
+    logAIPerformance(fileAnalysisStart, "Smart File Analysis", {
+      confidence: fileAnalysis.confidence,
+      shouldCreate: fileAnalysis.shouldCreateFile,
+      intent: fileAnalysis.intent,
+    });
+
+    console.log("🔄 Starting parallel processing...");
+
+    // ✅ FIXED: Remove suggestions from parallel processing - do it after AI response
+    let contextResult, fileContextResult, urlResult;
+
+    try {
+      // Task 1: URL Processing
+      console.log("🔗 Starting URL processing...");
+      const urlProcessingPromise = processUrlsOptimized(userMessage, res).catch(error => {
+        console.error("❌ URL processing failed:", error);
+        return { urlData: [], urlContent: "", processedUrls: [], fullUserMessage: userMessage };
+      });
+
+      // Task 2: Context Retrieval
+      console.log("📚 Starting context retrieval...");
+      const contextPromise = getConversationContextOptimized(
+        conversation_id,
+        user_id
+      ).catch(error => {
+        console.error("❌ Context retrieval failed:", error);
+        return { summaryContext: "", shouldRename: false, newConversationName: null };
+      });
+
+      // Task 3: File context
+      console.log("📄 Starting file context retrieval...");
+      const fileContextPromise = getFileContextBasedOnUpload(
+        conversation_id,
+        user_id,
+        extracted_summary,
+        userMessage
+      ).catch(error => {
+        console.error("❌ File context retrieval failed:", error);
+        return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+      });
+
+      // ⚡ Get context immediately with proper error handling - ONLY 3 TASKS NOW
+      console.log("⏳ Waiting for parallel tasks to complete...");
+      [contextResult, fileContextResult, urlResult] = await Promise.all([
+        contextPromise,
+        fileContextPromise,
+        urlProcessingPromise,
+      ]);
+
+      console.log("✅ Parallel processing completed successfully");
+      console.log("📊 Context result:", !!contextResult);
+      console.log("📊 File context result:", !!fileContextResult);
+      console.log("📊 URL result:", !!urlResult);
+
+    } catch (parallelError) {
+      console.error("❌ Parallel processing failed:", parallelError);
+      
+      // Provide fallback values
+      contextResult = { summaryContext: "", shouldRename: false, newConversationName: null };
+      fileContextResult = { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+      urlResult = { urlData: [], urlContent: "", processedUrls: [], fullUserMessage: userMessage };
+    }
 
     const { summaryContext, shouldRename, newConversationName } = contextResult;
-    const { 
-      fileContext = "", 
-      fileNames = [], 
-      fileCount = 0, 
-      contextType = "none" 
+    const {
+      fileContext = "",
+      fileNames = [],
+      fileCount = 0,
+      contextType = "none",
     } = fileContextResult || {};
 
-    console.log("🔍 DEBUG - fileContextResult type:", typeof fileContextResult);
-console.log("🔍 DEBUG - fileContext type:", typeof fileContext);
-// console.log("🔍 DEBUG - fileContext value:", fileContext);
-
-// Wait for remaining tasks to complete
-  const [ suggestions] = await Promise.all([
-   
-    suggestionPromise,
-  ]);
-// After getting file context, add this debug:
-console.log("🔍 DEBUG - fileContextResult:", JSON.stringify(fileContextResult, null, 2));
-
-  const { urlData, urlContent, processedUrls, fullUserMessage } = urlResult;
-    console.log(`📄 File context: ${fileCount} files, ${fileContext.length} characters, type: ${contextType}`);
-    console.log(`📄 File names:`, fileNames);
+    const { urlData, urlContent, processedUrls, fullUserMessage } = urlResult;
 
     console.log(`⚡ Context loaded in ${Date.now() - startTime}ms`);
 
-
-// After file processing, before sending to AI:
-// ✅ HANDLE FILE UPLOADS (Only if files are provided)
-   // ✅ HANDLE FILE UPLOADS (Only if files are provided)
-    // let fileUploadResults = [];
-    // if (uploadedFiles && uploadedFiles.length > 0) {
-    //   console.log(`📁 Processing ${uploadedFiles.length} uploaded files...`);
-      
-    //   for (const file of uploadedFiles) {
-    //     try {
-    //       const fileBuffer = file.buffer;
-    //       const originalFilename = file.originalname;
-          
-    //       let filePath;
-    //       try {
-    //         filePath = await uploadToFTP(fileBuffer, originalFilename);
-    //         console.log("✅ File uploaded successfully:", filePath);
-    //       } catch (ftpError) {
-    //         console.error("❌ FTP upload failed:", ftpError.message);
-            
-    //         fileUploadResults.push({
-    //           file_name: originalFilename,
-    //           original_filename: originalFilename,
-    //           display_filename: sanitizeDisplayName(originalFilename),
-    //           file_path: null,
-    //           file_size: fileBuffer.length,
-    //           mime_type: file.mimetype,
-    //           upload_success: false,
-    //           error: ftpError.message || "Upload failed",
-    //           upload_timestamp: new Date().toISOString()
-    //         });
-    //         continue;
-    //       }
-          
-    //       let extractedText = "";
-    //       try {
-    //         extractedText = await extractText(fileBuffer, file.mimetype, originalFilename);
-    //       } catch (extractError) {
-    //         console.error("❌ Text extraction failed:", extractError.message);
-    //         extractedText = "[Error extracting text]";
-    //       }
-          
-    //       fileUploadResults.push({
-    //         file_name: originalFilename,
-    //         original_filename: originalFilename,
-    //         display_filename: sanitizeDisplayName(originalFilename),
-    //         unique_filename: filePath.split('/').pop(),
-    //         file_path: filePath,
-    //         file_size: fileBuffer.length,
-    //         mime_type: file.mimetype,
-    //         upload_success: true,
-    //         error: null,
-    //         extracted_text: extractedText,
-    //         upload_timestamp: new Date().toISOString()
-    //       });
-          
-    //     } catch (generalError) {
-    //       console.error("❌ File processing failed:", generalError.message);
-          
-    //       fileUploadResults.push({
-    //         file_name: file.originalname || "unknown",
-    //         original_filename: file.originalname || "unknown",
-    //         display_filename: sanitizeDisplayName(file.originalname || "unknown"),
-    //         file_path: null,
-    //         file_size: file.size || 0,
-    //         mime_type: file.mimetype || "unknown",
-    //         upload_success: false,
-    //         error: generalError.message || "Processing failed",
-    //         upload_timestamp: new Date().toISOString()
-    //       });
-    //     }
-    //   }
-    // } else {
-    //   console.log("📁 No files to process - continuing with text-only chat");
-    // }
-
-// 🧠 GET USER INFO FOR PERSONALIZED RESPONSES
-
-
-let userInfo = null;
-try {
-  const userResult = await executeQuery(
-    "SELECT username FROM users WHERE id = ?",
-    [user_id]
-  );
-  if (userResult && userResult.length > 0) {
-    userInfo = { username: userResult[0].username };
-    console.log("✅ User info loaded:", userInfo.username);
-  }
-} catch (userError) {
-  console.log("⚠️ Could not fetch user info for personalization:", userError.message);
-}
-
-// 🧠 BUILD AI MESSAGES EFFICIENTLY WITH USER CONTEXT
- const finalMessages = buildAIMessagesWithSmartContext(
-  summaryContext, 
-  extracted_summary, 
-  fullUserMessage,  // This becomes userMessage in the function
-  userInfo,         // userInfo 
-  fileNames,        // fileNames
-  fileContext,      // fileContext
-  contextType,      // contextType
-  urlContent        // urlContent
-);
-console.log("🔍 FINAL DEBUG - Messages being sent to AI:");
-finalMessages.forEach((msg, index) => {
-  console.log(`Message ${index}: ${msg.role} - ${msg.content.length} chars`);
-  if (msg.content.includes("COMPLETE FILE CONTENT")) {
-    console.log(`File content preview: ${msg.content.substring(0, 500)}`);
-  }
-});
-
-    // 🚀 START AI RESPONSE STREAM IMMEDIATELY (Don't wait for URLs)
-    // let aiResponse = "";
-    // const aiStartTime = Date.now();
-
-    // try {
-    //   const stream = await deepseek.chat.completions.create({
-    //     model: "deepseek-chat",
-    //     messages: finalMessages,
-    //     temperature: 0.2,
-    //     max_tokens: 2000,
-    //     stream: true,
-    //   });
-// 🚀 SMART MODEL SELECTION & AI RESPONSE STREAM
-// 🚀 SMART MODEL SELECTION & AI RESPONSE STREAM
-let aiResponse = "";
-const aiStartTime = Date.now();
-
-// ⚡ Select optimal model based on token count
-const modelSelection = await selectOptimalModel(finalMessages);
-const selectedModel = modelSelection.model;
-
-console.log(`🤖 Selected Model: ${selectedModel.toUpperCase()} | Tokens: ${modelSelection.tokenCount}`);
-
-let stream;
-
-try {
-  if (selectedModel === 'deepseek') {
-    // Use DeepSeek - should be reliable
-    stream = await deepseek.chat.completions.create({
-      model: "deepseek-chat",
-      messages: finalMessages,
-      temperature: 0.5,
-      max_tokens: 2000,
-      stream: true,
-    });
-  } else {
-    // Use Llama - handle failure explicitly
-    stream = await llama.chat.completions.create({
-      messages: finalMessages,
-      temperature: 0.7,
-      max_tokens: 2000,
-      stream: true,
-    });
-  }
-} catch (modelError) {
-  console.error(`❌ ${selectedModel.toUpperCase()} API failed:`, modelError.message);
-  
-  // ✅ ROLLBACK FILES ON MODEL ERROR
-  if (_file_upload_ids && Array.isArray(_file_upload_ids) && _file_upload_ids.length > 0) {
+    // 🧠 GET USER INFO FOR PERSONALIZED RESPONSES
+    let userInfo = null;
     try {
-      await rollbackPendingFiles(_file_upload_ids);
-      console.log(`🔄 Rolled back ${_file_upload_ids.length} pending files`);
-    } catch (rollbackError) {
-      console.error("❌ Failed to rollback files:", rollbackError);
+      const userResult = await executeQuery(
+        "SELECT username FROM users WHERE id = ?",
+        [user_id]
+      );
+      if (userResult && userResult.length > 0) {
+        userInfo = { username: userResult[0].username };
+        console.log("✅ User info loaded:", userInfo.username);
+      }
+    } catch (userError) {
+      console.log(
+        "⚠️ Could not fetch user info for personalization:",
+        userError.message
+      );
     }
-  }
 
-  // ✅ SEND ERROR MESSAGE TO FRONTEND (NO AI NEEDED)
-  try {
-    console.log("📤 Sending error message to frontend...");
-    
-    res.write(JSON.stringify({
-      type: "error",
-      error: "I'm unable to process your request at the moment. Please try again in a few minutes.",
-      timestamp: new Date().toISOString()
-    }) + "\n");
-    
-    res.end();
-    console.log("✅ Error message sent to frontend");
-    
-  } catch (responseError) {
-    console.error("❌ Failed to send error response:", responseError);
-  }
-  
-  return; // ✅ Exit function completely
-}
+    // 🧠 BUILD ENHANCED AI MESSAGES WITH SMART FILE DETECTION
+    console.log("🧠 Building AI messages...");
+    const messagesBuildStart = Date.now();
+    const finalMessages = buildAIMessagesWithSmartContext(
+      summaryContext,
+      extracted_summary,
+      fullUserMessage,
+      userInfo,
+      fileNames,
+      fileContext,
+      contextType,
+      urlContent
+    );
+    logAIPerformance(messagesBuildStart, "AI Messages Build", {
+      messagesCount: finalMessages.length,
+      fileDetected: fileAnalysis.shouldCreateFile,
+    });
 
-// ✅ Continue with successful stream processing ONLY if no error occurred above
-console.log("✅ Model API call successful, starting stream...");
+    console.log("🤖 Starting AI model selection and response...");
 
-try {
-  // Send initial metadata immediately
-  res.write(JSON.stringify({
-    type: "start",
-    conversation_id,
-    conversation_name: shouldRename ? "Generating title..." : newConversationName,
-    conversation_renamed: shouldRename,
-    context: {
-      document_available: !!extracted_summary,
-      conversation_context_available: !!summaryContext,
-      uploaded_files_available: fileCount > 0,
-      uploaded_files_count: fileCount,
-      uploaded_file_names: fileNames,
-      file_context_type: contextType,
-    },
-    processing_time: Date.now() - startTime,
-  }) + "\n");
+    // 🚀 SMART MODEL SELECTION & AI RESPONSE STREAM
+    let aiResponse = "";
+    let rawAiResponse = "";
+    const aiStartTime = Date.now();
 
-  console.log(`🚀 AI stream started with ${selectedModel.toUpperCase()} in ${Date.now() - aiStartTime}ms`);
+    const modelSelection = await selectOptimalModel(finalMessages);
+    const selectedModel = modelSelection.model;
 
-  // Stream the response chunks
-// Stream the response chunks
+    console.log(
+      `🤖 Selected Model: ${selectedModel.toUpperCase()} | Tokens: ${
+        modelSelection.tokenCount
+      } | File Creation: ${fileAnalysis.shouldCreateFile ? "YES" : "NO"}`
+    );
+
+    let stream;
+
+    try {
+      console.log("🚀 Creating AI stream...");
+      
+      if (selectedModel === "deepseek") {
+        stream = await deepseek.chat.completions.create({
+          model: "deepseek-chat",
+          messages: finalMessages,
+          temperature: fileAnalysis.shouldCreateFile ? 0.3 : 0.7,
+          max_tokens: fileAnalysis.shouldCreateFile ? 3000 : 2000,
+          stream: true,
+        });
+      } else {
+        stream = await llama.chat.completions.create({
+          messages: finalMessages,
+          temperature: fileAnalysis.shouldCreateFile ? 0.3 : 0.7,
+          max_tokens: fileAnalysis.shouldCreateFile ? 3000 : 2000,
+          stream: true,
+        });
+      }
+
+      console.log("✅ AI stream created successfully");
+
+    } catch (modelError) {
+      console.error(
+        `❌ ${selectedModel.toUpperCase()} API failed:`,
+        modelError.message
+      );
+
+      if (
+        _file_upload_ids &&
+        Array.isArray(_file_upload_ids) &&
+        _file_upload_ids.length > 0
+      ) {
+        try {
+          await rollbackPendingFiles(_file_upload_ids);
+          console.log(
+            `🔄 Rolled back ${_file_upload_ids.length} pending files`
+          );
+        } catch (rollbackError) {
+          console.error("❌ Failed to rollback files:", rollbackError);
+        }
+      }
+
+      try {
+        console.log("📤 Sending error message to frontend...");
+        res.write(
+          JSON.stringify({
+            type: "error",
+            error:
+              "I'm unable to process your request at the moment. Please try again in a few minutes.",
+            timestamp: new Date().toISOString(),
+          }) + "\n"
+        );
+        res.end();
+        console.log("✅ Error message sent to frontend");
+      } catch (responseError) {
+        console.error("❌ Failed to send error response:", responseError);
+      }
+
+      return;
+    }
+
+    console.log("✅ Model API call successful, starting stream...");
+    try {
+      // Send initial metadata immediately with file analysis
+      res.write(
+        JSON.stringify({
+          type: "start",
+          conversation_id,
+          conversation_name: shouldRename
+            ? "Generating title..."
+            : newConversationName,
+          conversation_renamed: shouldRename,
+          file_creation_mode: fileAnalysis.shouldCreateFile,
+          file_analysis: {
+            confidence: fileAnalysis.confidence,
+            intent: fileAnalysis.intent,
+            expected_file_type: fileAnalysis.fileType,
+          },
+          context: {
+            document_available: !!extracted_summary,
+            conversation_context_available: !!summaryContext,
+            uploaded_files_available: fileCount > 0,
+            uploaded_files_count: fileCount,
+            uploaded_file_names: fileNames,
+            file_context_type: contextType,
+          },
+          processing_time: Date.now() - startTime,
+        }) + "\n"
+      );
+
+      console.log(
+        `🚀 AI stream started with ${selectedModel.toUpperCase()} in ${
+          Date.now() - aiStartTime
+        }ms`
+      );
+
+      // ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
+//       for await (const chunk of stream) {
+//   if (chunk.choices && chunk.choices.length > 0) {
+//     const content = chunk.choices[0].delta?.content || "";
+//     if (content) {
+//       rawAiResponse += content;
+      
+//       // ✅ SIMPLE FIX: Process content in correct order
+//       let displayContent = content;
+      
+//       // Step 1: Convert escape sequences to actual characters
+//       displayContent = displayContent
+//         .replace(/\\n/g, '\n')       // Convert \n to actual newlines
+//         .replace(/\\t/g, '\t')       // Convert \t to actual tabs
+//         .replace(/\\\"/g, '"')       // Convert \" to quotes
+//         .replace(/\\\'/g, "'");      // Convert \' to apostrophes
+      
+//       // Step 2: Escape HTML BEFORE applying formatting
+//       displayContent = escapeHtmlContent(displayContent);
+      
+//       // Step 3: Apply ChatGPT-like formatting AFTER HTML escaping
+//       displayContent = formatLikeChatGPT(displayContent);
+      
+//       aiResponse += displayContent;
+      
+//       res.write(JSON.stringify({
+//         type: "content",
+//         content: displayContent,
+//       }) + "\n");
+//     }
+//   }
+// }
+// ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
+// let isInCreateFile = false;
+// let createFileBuffer = "";
+// if (isInCreateFile) {
+//   displayContent = displayContent
+//     .replace(/&/g, '&amp;')
+//     .replace(/</g, '&lt;')
+//     .replace(/>/g, '&gt;')
+//     .replace(/"/g, '&quot;')
+//     .replace(/'/g, '&#39;');
+// }
+
+// ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
+let isInCreateFile = false;
+let createFileBuffer = "";
+
 for await (const chunk of stream) {
   if (chunk.choices && chunk.choices.length > 0) {
     const content = chunk.choices[0].delta?.content || "";
     if (content) {
-      aiResponse += content;
+      rawAiResponse += content;
+      
+      // ✅ DETECT CREATE_FILE START/END
+      if (content.includes('[CREATE_FILE:')) {
+        isInCreateFile = true;
+        createFileBuffer = content;
+      } else if (isInCreateFile) {
+        createFileBuffer += content;
+        if (content.includes(']')) {
+          isInCreateFile = false;
+          createFileBuffer = "";
+        }
+      }
+      
+      // ✅ SIMPLE FIX: Process content in correct order
+      let displayContent = content;
+      
+      // Step 1: Convert escape sequences to actual characters
+      displayContent = displayContent
+        .replace(/\\n/g, '\n')       // Convert \n to actual newlines
+        .replace(/\\t/g, '\t')       // Convert \t to actual tabs
+        .replace(/\\\"/g, '"')       // Convert \" to quotes
+        .replace(/\\\'/g, "'");      // Convert \' to apostrophes
+      
+      // Step 2: Handle HTML content ONLY inside CREATE_FILE
+      if (isInCreateFile) {
+        // Check if this is HTML content
+        if (displayContent.includes('<!DOCTYPE html>') || 
+            displayContent.includes('<html') || 
+            displayContent.includes('<head>') || 
+            displayContent.includes('<body>') ||
+            displayContent.includes('<div') ||
+            displayContent.includes('<p>') ||
+            displayContent.includes('<h1>') ||
+            displayContent.includes('<style>')) {
+          
+          // Escape HTML for display
+          displayContent = displayContent
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        }
+      }
+      
+      // Step 3: Apply ChatGPT-like formatting (will skip if HTML is escaped)
+      displayContent = formatLikeChatGPT(displayContent);
+      
+      aiResponse += displayContent;
+      
       res.write(JSON.stringify({
         type: "content",
-        content: content,
+        content: displayContent,
       }) + "\n");
     }
   }
 }
 
 
-  
+      logAIPerformance(aiStartTime, "AI Response Stream", {
+        model: selectedModel,
+        responseLength: aiResponse.length,
+        fileCreationMode: fileAnalysis.shouldCreateFile,
+      });
 
-  // 🚀 HANDLE RENAME RESULT
-  let finalConversationName = newConversationName;
-  if (shouldRename) {
-    try {
-      const renameResult = await executeRename(conversation_id, userMessage, user_id);
-      if (renameResult.success) {
-        finalConversationName = renameResult.title;
-        res.write(JSON.stringify({
-          type: "conversation_renamed",
-          conversation_id: conversation_id,
-          new_name: finalConversationName,
-          success: true,
-        }) + "\n");
+      // ✅ PROCESS FILES USING RAW RESPONSE
+      let generatedFiles = [];
+      let finalAiResponse = aiResponse;
+
+      try {
+        console.log(
+          `🤖 Checking raw AI response for file generation requests...`
+        );
+
+        if (rawAiResponse.includes("[CREATE_FILE:")) {
+          const fileGenStart = Date.now();
+
+          res.write(
+            JSON.stringify({
+              type: "file_generation",
+              status: "processing",
+              message: "⚡ Processing your document...",
+            }) + "\n"
+          );
+
+          const fileGenerationResult = await handleAIFileGeneration(
+            rawAiResponse,
+            conversation_id,
+            user_id,
+            res
+          );
+
+          logAIPerformance(fileGenStart, "File Generation", {
+            filesCreated: fileGenerationResult.generatedFiles?.length || 0,
+          });
+
+          if (fileGenerationResult.hasGeneratedFiles) {
+            generatedFiles = fileGenerationResult.generatedFiles;
+
+            // Add professional download links
+            generatedFiles.forEach((file) => {
+              const downloadLink = `\n\n📄 **${
+                file.originalFilename || file.filename
+              }.${
+                file.fileType
+              }** - Professional document ready!\n🔗 [**Download ${
+                file.originalFilename || file.filename
+              }**](${file.downloadUrl})\n*File size: ${(
+                file.size / 1024
+              ).toFixed(1)} KB*\n`;
+
+              res.write(
+                JSON.stringify({
+                  type: "content",
+                  content: downloadLink,
+                }) + "\n"
+              );
+            });
+
+            console.log(
+              `✅ AI generated ${generatedFiles.length} file(s) successfully`
+            );
+          }
+
+          // Send completion event
+          res.write(
+            JSON.stringify({
+              type: "file_created",
+              status: "completed",
+              files_count: generatedFiles.length,
+              message:
+                generatedFiles.length > 0
+                  ? "🎉 Documents created successfully!"
+                  : "⚠️ No files were created",
+            }) + "\n"
+          );
+        }
+      } catch (fileError) {
+        console.error("❌ AI file generation failed:", fileError);
+
+        res.write(
+          JSON.stringify({
+            type: "file_error",
+            error: "File creation failed",
+            message: fileError.message,
+          }) + "\n"
+        );
       }
-    } catch (renameError) {
-      console.error("❌ Rename failed:", renameError);
-    }
-  }
 
-  // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
-  if (_file_upload_ids && Array.isArray(_file_upload_ids) && _file_upload_ids.length > 0) {
-    try {
-      await confirmPendingFiles(_file_upload_ids);
-      console.log(`✅ Confirmed ${_file_upload_ids.length} files after successful AI response`);
-    } catch (confirmError) {
-      console.error("❌ Failed to confirm files:", confirmError);
-    }
-  }
+           // 🚀 HANDLE RENAME RESULT
+      let finalConversationName = newConversationName;
+      if (shouldRename) {
+        try {
+          const renameResult = await executeRename(
+            conversation_id,
+            userMessage,
+            user_id
+          );
+          if (renameResult.success) {
+            finalConversationName = renameResult.title;
+            res.write(
+              JSON.stringify({
+                type: "conversation_renamed",
+                conversation_id: conversation_id,
+                new_name: finalConversationName,
+                success: true,
+              }) + "\n"
+            );
+          }
+        } catch (renameError) {
+          console.error("❌ Rename failed:", renameError);
+        }
+      }
 
-  // Send final data
-  res.write(JSON.stringify({
-    type: "end",
-    suggestions: suggestions,
-    full_response: aiResponse,
-    processed_urls: urlData.map((data) => ({
-  url: data.url,
-  title: data.title,
-  success: !data.error,
-  error: data.error,
-  site_type: data.metadata?.siteType,  // Optional enhancement
-  content_length: data.content?.length || 0  // Optional enhancement
-})),
-    context: {
-      document_available: !!extracted_summary,
-      conversation_context_available: !!summaryContext,
-      url_content_available: !!urlContent,
-      urls_processed: urlData.length,
-      uploaded_files_available: fileCount > 0,
-      uploaded_files_count: fileCount,
-      file_context_type: contextType,
-    },
-    total_processing_time: Date.now() - startTime,
-  }) + "\n");
+      // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
+      if (
+        _file_upload_ids &&
+        Array.isArray(_file_upload_ids) &&
+        _file_upload_ids.length > 0
+      ) {
+        try {
+          await confirmPendingFiles(_file_upload_ids);
+          console.log(
+            `✅ Confirmed ${_file_upload_ids.length} files after successful AI response`
+          );
+        } catch (confirmError) {
+          console.error("❌ Failed to confirm files:", confirmError);
+        }
+      }
 
-  res.end();
+      // ✅ GENERATE SUGGESTIONS AFTER AI RESPONSE (MOVED HERE)
+      console.log("💡 Generating suggestions based on conversation...");
+      let suggestions = [];
+      try {
+        const suggestionStart = Date.now();
+        suggestions = await generateFastSuggestions(userMessage, aiResponse);
+        logAIPerformance(suggestionStart, "Suggestions Generation", {
+          count: suggestions.length,
+        });
+        console.log("✅ Suggestions generated:", suggestions.length);
+      } catch (suggestionError) {
+        console.error("❌ Suggestions failed:", suggestionError);
+        suggestions = [
+          "Can you explain this further?",
+          "What are some examples?",
+          "How can I apply this?",
+        ];
+      }
 
-  // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
-  process.nextTick(() => {
-    handleAllBackgroundTasksOptimized(
-      conversation_id,
-      fullUserMessage,
-      aiResponse,
-      extracted_summary,
-      suggestions,
-      user_id,
-      shouldRename,
-      finalConversationName,
-      processedUrls,
-      urlData,
-      urlContent,
-      fileContext,
-    _file_upload_ids // ✅ Pass the file upload IDs
-    );
-  });
+      // Send final data with enhanced information
+      res.write(
+        JSON.stringify({
+          type: "end",
+          suggestions: suggestions,
+          full_response: finalAiResponse,
+          processed_urls: urlData.map((data) => ({
+            url: data.url,
+            title: data.title,
+            success: !data.error,
+            error: data.error,
+            site_type: data.metadata?.siteType,
+            content_length: data.content?.length || 0,
+          })),
+          // ✅ ENHANCED: Send generated files with professional info
+          generated_files: generatedFiles.map((file) => ({
+            filename: file.originalFilename || file.filename,
+            actual_filename: file.filename,
+            type: file.fileType,
+            size: file.size,
+            size_formatted: `${(file.size / 1024).toFixed(1)} KB`,
+            download_url: file.downloadUrl,
+            ai_generated: true,
+            created_at: new Date().toISOString(),
+            professional: true,
+          })),
+          // ✅ ENHANCED CONTEXT INFO
+          context: {
+            document_available: !!extracted_summary,
+            conversation_context_available: !!summaryContext,
+            url_content_available: !!urlContent,
+            urls_processed: urlData.length,
+            uploaded_files_available: fileCount > 0,
+            uploaded_files_count: fileCount,
+            file_context_type: contextType,
+            files_generated: generatedFiles.length,
+            ai_analysis: {
+              file_creation_detected: fileAnalysis.shouldCreateFile,
+              confidence: fileAnalysis.confidence,
+              intent: fileAnalysis.intent,
+              model_used: selectedModel,
+            },
+          },
+          performance: {
+            total_processing_time: Date.now() - startTime,
+            ai_response_time: Date.now() - aiStartTime,
+            files_created: generatedFiles.length,
+            model_used: selectedModel.toUpperCase(),
+          },
+        }) + "\n"
+      );
 
-} catch (streamError) {
-  console.error("❌ Streaming error:", streamError);
-  
-  // ✅ ROLLBACK FILES ON STREAMING ERROR
-  if (_file_upload_ids && Array.isArray(_file_upload_ids) && _file_upload_ids.length > 0) {
-    try {
-      await rollbackPendingFiles(_file_upload_ids);
-    } catch (rollbackError) {
-      console.error("❌ Failed to rollback files:", rollbackError);
-    }
-  }
-  
-  if (!res.headersSent) {
-    try {
-      res.write(JSON.stringify({
-        type: "error",
-        error: "I'm unable to process your request at the moment. Please try again in a few minutes."
-      }) + "\n");
       res.end();
-    } catch (responseError) {
-      console.error("❌ Failed to send streaming error response:", responseError);
-    }
-  }
-} 
 
-}catch (error) {
+      // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
+      process.nextTick(() => {
+        // ✅ ENSURE finalAiResponse includes download links
+        let responseWithLinks = aiResponse;
+
+        if (generatedFiles && generatedFiles.length > 0) {
+          generatedFiles.forEach((file) => {
+            const downloadLink = `\n\n📄 **${
+              file.originalFilename || file.filename
+            }.${
+              file.fileType
+            }** - Professional document ready!\n🔗 [**Download ${
+              file.originalFilename || file.filename
+            }**](${file.downloadUrl})\n*File size: ${(file.size / 1024).toFixed(
+              1
+            )} KB*\n`;
+            responseWithLinks += downloadLink;
+          });
+        }
+
+        handleAllBackgroundTasksOptimizedWithFiles(
+          conversation_id,
+          fullUserMessage,
+          responseWithLinks,
+          extracted_summary,
+          suggestions,
+          user_id,
+          shouldRename,
+          finalConversationName,
+          processedUrls,
+          urlData,
+          urlContent,
+          fileContext,
+          _file_upload_ids,
+          generatedFiles
+        );
+      });
+    } catch (streamError) {
+      console.error("❌ Streaming error:", streamError);
+
+      if (
+        _file_upload_ids &&
+        Array.isArray(_file_upload_ids) &&
+        _file_upload_ids.length > 0
+      ) {
+        try {
+          await rollbackPendingFiles(_file_upload_ids);
+        } catch (rollbackError) {
+          console.error("❌ Failed to rollback files:", rollbackError);
+        }
+      }
+
+      if (!res.headersSent) {
+        try {
+          res.write(
+            JSON.stringify({
+              type: "error",
+              error:
+                "I'm unable to process your request at the moment. Please try again in a few minutes.",
+            }) + "\n"
+          );
+          res.end();
+        } catch (responseError) {
+          console.error(
+            "❌ Failed to send streaming error response:",
+            responseError
+          );
+        }
+      }
+    }
+  } catch (error) {
     console.error("❌ Chat controller error:", error.message);
-      
-    // ✅ ROLLBACK FILES ON GENERAL ERROR
+    console.error("❌ Full error:", error);
     await rollbackPendingFiles(_file_upload_ids);
-    
+
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
     }
-  };
+  }
 };
+
+
+// exports.askChatbot = async (req, res) => {
+//   console.log("✅ Received request at /chat:", req.body);
+
+//   let { userMessage, conversation_id, extracted_summary, _file_upload_ids } =
+//     req.body;
+//   const user_id = req.user?.user_id;
+
+//   // ✅ STRICT USER VALIDATION
+//   if (!user_id || isNaN(user_id)) {
+//     console.error("❌ Invalid user_id in askChatbot:", user_id);
+//     return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
+//   }
+
+//   if (!userMessage || userMessage.trim().length === 0) {
+//     return res.status(400).json({
+//       error: "User message cannot be empty",
+//     });
+//   }
+
+//   console.log(
+//     "🔍 Processing chat for user_id:",
+//     user_id,
+//     "conversation:",
+//     conversation_id
+//   );
+
+//   try {
+//     // Set headers for streaming
+//     res.writeHead(200, {
+//       "Content-Type": "text/plain; charset=utf-8",
+//       "Transfer-Encoding": "chunked",
+//       "Cache-Control": "no-cache",
+//       Connection: "keep-alive",
+//       "Access-Control-Allow-Origin": "*",
+//       "Access-Control-Allow-Headers": "Cache-Control",
+//     });
+
+//     // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED
+//     if (conversation_id && !isNaN(conversation_id)) {
+//       const ownershipCheck = await executeQuery(
+//         "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
+//         [conversation_id, user_id]
+//       );
+
+//       if (!ownershipCheck || ownershipCheck.length === 0) {
+//         console.error("❌ Unauthorized conversation access");
+//         await rollbackPendingFiles(_file_upload_ids);
+//         res.write(
+//           JSON.stringify({
+//             type: "error",
+//             error: "Unauthorized: Conversation does not belong to user",
+//           }) + "\n"
+//         );
+//         res.end();
+//         return;
+//       }
+//     }
+
+//     // 🚀 IMMEDIATE PARALLEL PROCESSING
+//     const startTime = Date.now();
+
+//     // Task 1: URL Processing
+//     const urlProcessingPromise = processUrlsOptimized(userMessage, res);
+
+//     // Task 2: Context Retrieval
+//     const contextPromise = getConversationContextOptimized(
+//       conversation_id,
+//       user_id
+//     );
+
+//     // Task 3: File context
+//     const fileContextPromise = getFileContextBasedOnUpload(
+//       conversation_id,
+//       user_id,
+//       extracted_summary,
+//       userMessage
+//     );
+
+//     // Task 4: Generate suggestions
+//     const suggestionPromise = generateFastSuggestions(userMessage);
+
+//     // ⚡ Get context immediately
+//     const [contextResult, fileContextResult, urlResult] = await Promise.all([
+//       contextPromise,
+//       fileContextPromise,
+//       urlProcessingPromise,
+//     ]);
+
+//     const { summaryContext, shouldRename, newConversationName } = contextResult;
+//     const {
+//       fileContext = "",
+//       fileNames = [],
+//       fileCount = 0,
+//       contextType = "none",
+//     } = fileContextResult || {};
+
+//     const { urlData, urlContent, processedUrls, fullUserMessage } = urlResult;
+
+//     // Wait for suggestions
+//     const suggestions = await suggestionPromise;
+
+//     console.log(`⚡ Context loaded in ${Date.now() - startTime}ms`);
+
+//     // 🧠 GET USER INFO FOR PERSONALIZED RESPONSES
+//     let userInfo = null;
+//     try {
+//       const userResult = await executeQuery(
+//         "SELECT username FROM users WHERE id = ?",
+//         [user_id]
+//       );
+//       if (userResult && userResult.length > 0) {
+//         userInfo = { username: userResult[0].username };
+//         console.log("✅ User info loaded:", userInfo.username);
+//       }
+//     } catch (userError) {
+//       console.log(
+//         "⚠️ Could not fetch user info for personalization:",
+//         userError.message
+//       );
+//     }
+
+//     // 🧠 BUILD AI MESSAGES
+//     const finalMessages = buildAIMessagesWithSmartContext(
+//       summaryContext,
+//       extracted_summary,
+//       fullUserMessage,
+//       userInfo,
+//       fileNames,
+//       fileContext,
+//       contextType,
+//       urlContent
+//     );
+
+//     // 🚀 SMART MODEL SELECTION & AI RESPONSE STREAM
+//     let aiResponse = "";
+//      let rawAiResponse = ""; // Keep original for file processing
+//     const aiStartTime = Date.now();
+
+//     const modelSelection = await selectOptimalModel(finalMessages);
+//     const selectedModel = modelSelection.model;
+
+//     console.log(
+//       `🤖 Selected Model: ${selectedModel.toUpperCase()} | Tokens: ${
+//         modelSelection.tokenCount
+//       }`
+//     );
+
+//     let stream;
+
+//     try {
+//       if (selectedModel === "deepseek") {
+//         stream = await deepseek.chat.completions.create({
+//           model: "deepseek-chat",
+//           messages: finalMessages,
+//           temperature: 0.5,
+//           max_tokens: 2000,
+//           stream: true,
+//         });
+//       } else {
+//         stream = await llama.chat.completions.create({
+//           messages: finalMessages,
+//           temperature: 0.7,
+//           max_tokens: 2000,
+//           stream: true,
+//         });
+//       }
+//     } catch (modelError) {
+//       console.error(
+//         `❌ ${selectedModel.toUpperCase()} API failed:`,
+//         modelError.message
+//       );
+
+//       if (
+//         _file_upload_ids &&
+//         Array.isArray(_file_upload_ids) &&
+//         _file_upload_ids.length > 0
+//       ) {
+//         try {
+//           await rollbackPendingFiles(_file_upload_ids);
+//           console.log(
+//             `🔄 Rolled back ${_file_upload_ids.length} pending files`
+//           );
+//         } catch (rollbackError) {
+//           console.error("❌ Failed to rollback files:", rollbackError);
+//         }
+//       }
+
+//       try {
+//         console.log("📤 Sending error message to frontend...");
+//         res.write(
+//           JSON.stringify({
+//             type: "error",
+//             error:
+//               "I'm unable to process your request at the moment. Please try again in a few minutes.",
+//             timestamp: new Date().toISOString(),
+//           }) + "\n"
+//         );
+//         res.end();
+//         console.log("✅ Error message sent to frontend");
+//       } catch (responseError) {
+//         console.error("❌ Failed to send error response:", responseError);
+//       }
+
+//       return;
+//     }
+
+//     console.log("✅ Model API call successful, starting stream...");
+
+//     try {
+//       // Send initial metadata immediately
+//       res.write(
+//         JSON.stringify({
+//           type: "start",
+//           conversation_id,
+//           conversation_name: shouldRename
+//             ? "Generating title..."
+//             : newConversationName,
+//           conversation_renamed: shouldRename,
+//           context: {
+//             document_available: !!extracted_summary,
+//             conversation_context_available: !!summaryContext,
+//             uploaded_files_available: fileCount > 0,
+//             uploaded_files_count: fileCount,
+//             uploaded_file_names: fileNames,
+//             file_context_type: contextType,
+
+//           },
+//           processing_time: Date.now() - startTime,
+//         }) + "\n"
+//       );
+
+//       console.log(
+//         `🚀 AI stream started with ${selectedModel.toUpperCase()} in ${
+//           Date.now() - aiStartTime
+//         }ms`
+//       );
+
+//       // Stream the response chunks
+//      // Stream the response chunks
+// for await (const chunk of stream) {
+//   if (chunk.choices && chunk.choices.length > 0) {
+//     const content = chunk.choices[0].delta?.content || "";
+//     if (content) {
+//       rawAiResponse += content; // Store complete response for file processing
+
+//       // ✅ INTELLIGENT FORMATTING - Apply different formatting based on context
+//       let displayContent = content;
+
+//       // ✅ DETECT if we're inside a CREATE_FILE tag for special handling
+//       const isInFileCreation = rawAiResponse.includes('[CREATE_FILE:') &&
+//                               !rawAiResponse.includes(']', rawAiResponse.lastIndexOf('[CREATE_FILE:'));
+
+//       if (isInFileCreation) {
+//         // ✅ SPECIAL FORMATTING for file content within CREATE_FILE tags
+//         displayContent = content
+//           .replace(/\\n/g, '\n')
+//           .replace(/\*\*([^*]+)\*\*/g, '**$1**')  // Keep bold formatting
+//           .replace(/^([A-Z][A-Z\s]+)$/gm, '## **$1**')  // ALL CAPS to headers
+//           .replace(/^([A-Z][^:]+):$/gm, '### **$1:**')   // Title case with colon
+//           .replace(/^(To|From|Date|Subject|Dear|Respected|Sincerely):/gm, '**$1:**'); // Business format
+//       } else {
+//         // ✅ REGULAR CONTENT FORMATTING
+//         displayContent = formatLikeChatGPT(content);
+//       }
+
+//       // ✅ SPECIAL HANDLING for CREATE_FILE start tags
+//       if (content.includes('[CREATE_FILE:')) {
+//         const fileMatch = content.match(/\[CREATE_FILE:([^:]+):([^:]+):/);
+//         if (fileMatch) {
+//           const fileType = fileMatch[1].toUpperCase();
+//           const fileName = fileMatch[2].replace(/_/g, ' ');
+
+//           displayContent = content.replace(/\[CREATE_FILE:([^:]+):([^:]+):/g,
+//             `\n\n🎯 **Creating Professional ${fileType} Document**\n📝 *Document: "${fileName}"*\n\n✨ *Generating with AI precision...*\n\n---\n\n`);
+//         }
+//       }
+
+//       aiResponse += displayContent;
+
+//       res.write(
+//         JSON.stringify({
+//           type: "content",
+//           content: displayContent,
+//         }) + "\n"
+//       );
+//     }
+//   }
+// }
+
+//     // ✅ PROCESS FILES USING RAW RESPONSE
+//     // ✅ PROCESS FILES USING RAW RESPONSE
+// // ✅ PROCESS FILES USING RAW RESPONSE
+// let generatedFiles = [];
+// let finalAiResponse = aiResponse;
+
+//       try {
+//         console.log(`🤖 Checking raw AI response for file generation requests...`);
+
+//         // ✅ SEND FILE CREATION STARTED NOTIFICATION
+//         if (rawAiResponse.includes('[CREATE_FILE:')) {
+//           res.write(
+//             JSON.stringify({
+//               type: "file_generation",
+//               status: "creating",
+//               message: "Creating your file..."
+//             }) + "\n"
+//           );
+
+//           console.log("📤 Sent file_generation event to frontend");
+
+//           // Process files
+//           const fileGenerationResult = await handleAIFileGeneration(
+//             rawAiResponse,
+//             conversation_id,
+//             user_id,
+//             res
+//           );
+
+//           console.log("🔍 File generation result:", {
+//             hasGeneratedFiles: fileGenerationResult.hasGeneratedFiles,
+//             filesCount: fileGenerationResult.generatedFiles?.length || 0
+//           });
+
+//           if (fileGenerationResult.hasGeneratedFiles) {
+//             generatedFiles = fileGenerationResult.generatedFiles;
+
+//             // Add download links
+//             generatedFiles.forEach(file => {
+//               const downloadLink = `\n\n📄 **${file.originalFilename || file.filename}.${file.fileType}** has been created!\n🔗 [Download ${file.originalFilename || file.filename}](${file.downloadUrl})`;
+
+//               res.write(
+//                 JSON.stringify({
+//                   type: "content",
+//                   content: downloadLink,
+//                 }) + "\n"
+//               );
+//             });
+
+//             console.log(`✅ AI generated ${generatedFiles.length} file(s) successfully`);
+//           }
+
+//           // ✅ ALWAYS SEND COMPLETION EVENT
+//           res.write(
+//             JSON.stringify({
+//               type: "file_created",
+//               status: "completed",
+//               files_count: generatedFiles.length
+//             }) + "\n"
+//           );
+
+//           console.log("📤 Sent file_created event to frontend");
+//         }
+
+//       } catch (fileError) {
+//         console.error("❌ AI file generation failed:", fileError);
+
+//         res.write(
+//           JSON.stringify({
+//             type: "file_error",
+//             error: "File creation failed",
+//             message: fileError.message
+//           }) + "\n"
+//         );
+
+//         console.log("📤 Sent file_error event to frontend");
+//       }
+
+//       // 🚀 HANDLE RENAME RESULT
+//       let finalConversationName = newConversationName;
+//       if (shouldRename) {
+//         try {
+//           const renameResult = await executeRename(
+//             conversation_id,
+//             userMessage,
+//             user_id
+//           );
+//           if (renameResult.success) {
+//             finalConversationName = renameResult.title;
+//             res.write(
+//               JSON.stringify({
+//                 type: "conversation_renamed",
+//                 conversation_id: conversation_id,
+//                 new_name: finalConversationName,
+//                 success: true,
+//               }) + "\n"
+//             );
+//           }
+//         } catch (renameError) {
+//           console.error("❌ Rename failed:", renameError);
+//         }
+//       }
+
+//       // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
+//       if (
+//         _file_upload_ids &&
+//         Array.isArray(_file_upload_ids) &&
+//         _file_upload_ids.length > 0
+//       ) {
+//         try {
+//           await confirmPendingFiles(_file_upload_ids);
+//           console.log(
+//             `✅ Confirmed ${_file_upload_ids.length} files after successful AI response`
+//           );
+//         } catch (confirmError) {
+//           console.error("❌ Failed to confirm files:", confirmError);
+//         }
+//       }
+
+//       // Send final data
+//    res.write(
+//   JSON.stringify({
+//     type: "end",
+//     suggestions: suggestions,
+//     full_response: finalAiResponse,
+//     processed_urls: urlData.map((data) => ({
+//       url: data.url,
+//       title: data.title,
+//       success: !data.error,
+//       error: data.error,
+//       site_type: data.metadata?.siteType,
+//       content_length: data.content?.length || 0,
+//     })),
+//     // ✅ FIXED: Send generated files with ACTUAL URLs
+//     generated_files: generatedFiles.map(file => ({
+//       filename: file.originalFilename || file.filename, // Display name
+//       actual_filename: file.filename, // Actual FTP filename
+//       type: file.fileType,
+//       size: file.size,
+//       download_url: file.downloadUrl, // Actual download URL
+//       ai_generated: true,
+//     })),
+//     context: {
+//       document_available: !!extracted_summary,
+//       conversation_context_available: !!summaryContext,
+//       url_content_available: !!urlContent,
+//       urls_processed: urlData.length,
+//       uploaded_files_available: fileCount > 0,
+//       uploaded_files_count: fileCount,
+//       file_context_type: contextType,
+//       files_generated: generatedFiles.length,
+//     },
+//     total_processing_time: Date.now() - startTime,
+//   }) + "\n"
+// );
+
+//   res.end();
+
+//       // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
+//      // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
+// process.nextTick(() => {
+//   // ✅ ENSURE finalAiResponse includes download links
+//   let responseWithLinks = aiResponse;
+
+//   if (generatedFiles && generatedFiles.length > 0) {
+//     generatedFiles.forEach(file => {
+//       const downloadLink = `\n\n📄 **${file.originalFilename || file.filename}.${file.fileType}** has been created!\n🔗 [Download ${file.originalFilename || file.filename}](${file.downloadUrl})`;
+//       responseWithLinks += downloadLink;
+//     });
+//   }
+
+//   handleAllBackgroundTasksOptimizedWithFiles(
+//     conversation_id,
+//     fullUserMessage,
+//     responseWithLinks, // ✅ Pass response WITH download links
+//     extracted_summary,
+//     suggestions,
+//     user_id,
+//     shouldRename,
+//     finalConversationName,
+//     processedUrls,
+//     urlData,
+//     urlContent,
+//     fileContext,
+//     _file_upload_ids,
+//     generatedFiles
+//   );
+// });
+
+//     } catch (streamError) {
+//       console.error("❌ Streaming error:", streamError);
+
+//       if (
+//         _file_upload_ids &&
+//         Array.isArray(_file_upload_ids) &&
+//         _file_upload_ids.length > 0
+//       ) {
+//         try {
+//           await rollbackPendingFiles(_file_upload_ids);
+//         } catch (rollbackError) {
+//           console.error("❌ Failed to rollback files:", rollbackError);
+//         }
+//       }
+
+//       if (!res.headersSent) {
+//         try {
+//           res.write(
+//             JSON.stringify({
+//               type: "error",
+//               error:
+//                 "I'm unable to process your request at the moment. Please try again in a few minutes.",
+//             }) + "\n"
+//           );
+//           res.end();
+//         } catch (responseError) {
+//           console.error(
+//             "❌ Failed to send streaming error response:",
+//             responseError
+//           );
+//         }
+//       }
+//     }
+//   } catch (error) {
+//     console.error("❌ Chat controller error:", error.message);
+//     await rollbackPendingFiles(_file_upload_ids);
+
+//     if (!res.headersSent) {
+//       res.status(500).json({ error: "Internal server error" });
+//     }
+//   }
+// };
+
+// ✅ HELPER: Check if we're inside a CREATE_FILE tag
+
+// ✅ REPLACE the main askChatbot function with this optimized version
+
+ 
 // 🚀 IMPROVED URL PROCESSING - Process all URLs together
 async function processUrlsOptimized(userMessage, res) {
   let urlData = [];
@@ -997,94 +2677,106 @@ async function processUrlsOptimized(userMessage, res) {
   }
 
   const extractedUrls = extractUrls(userMessage);
-  
+
   if (extractedUrls.length === 0) {
     return { urlData, urlContent, processedUrls, fullUserMessage };
   }
 
-  console.log(`🔗 Found ${extractedUrls.length} URLs - processing all together with universal extractor`);
+  console.log(
+    `🔗 Found ${extractedUrls.length} URLs - processing all together with universal extractor`
+  );
 
   // Send URL processing status immediately
-  res.write(JSON.stringify({
-    type: "url_processing",
-    status: "started",
-    urls: extractedUrls,
-    count: extractedUrls.length,
-  }) + "\n");
+  res.write(
+    JSON.stringify({
+      type: "url_processing",
+      status: "started",
+      urls: extractedUrls,
+      count: extractedUrls.length,
+    }) + "\n"
+  );
 
   try {
     // ✅ PROCESS ALL URLs TOGETHER (not individually)
     urlData = await processUrls(extractedUrls); // This processes all URLs in one call
-    
+
     if (urlData && urlData.length > 0) {
       // ✅ Get all URLs that were attempted (including failed ones)
       processedUrls = extractedUrls;
-      
+
       // ✅ Create URL content summary with MORE content and better formatting
       urlContent = urlData
         .filter((data) => data && data.content && !data.error)
         .map((data, index) => {
-          const siteType = data.metadata?.siteType ? ` [${data.metadata.siteType.toUpperCase()}]` : '';
-          const contentPreview = data.content.length > 4000 
-            ? data.content.substring(0, 4000) + "... [content truncated]"
-            : data.content;
-          
+          const siteType = data.metadata?.siteType
+            ? ` [${data.metadata.siteType.toUpperCase()}]`
+            : "";
+          const contentPreview =
+            data.content.length > 4000
+              ? data.content.substring(0, 4000) + "... [content truncated]"
+              : data.content;
+
           return `=== URL ${index + 1}${siteType} ===
 URL: ${data.url}
 Title: ${data.title}
-Description: ${data.description || 'No description available'}
+Description: ${data.description || "No description available"}
 
 Content:
 ${contentPreview}
 
-${'='.repeat(80)}`;
+${"=".repeat(80)}`;
         })
         .join("\n\n");
 
       // ✅ Add URL references to user message
       if (processedUrls.length > 0) {
-        const successfulCount = urlData.filter(d => !d.error).length;
+        const successfulCount = urlData.filter((d) => !d.error).length;
         fullUserMessage += `\n\n[Referenced ${successfulCount}/${processedUrls.length} URLs successfully processed]`;
       }
 
       // Send completion status with details
       const successfulUrls = urlData.filter((d) => d && !d.error);
       const failedUrls = urlData.filter((d) => d && d.error);
-      
-      res.write(JSON.stringify({
-        type: "url_processing",
-        status: "completed",
-        total_urls: urlData.length,
-        successful: successfulUrls.length,
-        failed: failedUrls.length,
-        content_extracted: urlContent.length > 0,
-        failed_urls: failedUrls.map(d => ({ url: d.url, error: d.error })),
-        successful_urls: successfulUrls.map(d => ({ 
-          url: d.url, 
-          title: d.title, 
-          site_type: d.metadata?.siteType,
-          content_length: d.content?.length || 0 
-        }))
-      }) + "\n");
-      
-      console.log(`✅ Batch URL processing completed: ${successfulUrls.length}/${urlData.length} successful`);
-      console.log(`📄 Total URL content: ${urlContent.length.toLocaleString()} characters`);
-    }
 
+      res.write(
+        JSON.stringify({
+          type: "url_processing",
+          status: "completed",
+          total_urls: urlData.length,
+          successful: successfulUrls.length,
+          failed: failedUrls.length,
+          content_extracted: urlContent.length > 0,
+          failed_urls: failedUrls.map((d) => ({ url: d.url, error: d.error })),
+          successful_urls: successfulUrls.map((d) => ({
+            url: d.url,
+            title: d.title,
+            site_type: d.metadata?.siteType,
+            content_length: d.content?.length || 0,
+          })),
+        }) + "\n"
+      );
+
+      console.log(
+        `✅ Batch URL processing completed: ${successfulUrls.length}/${urlData.length} successful`
+      );
+      console.log(
+        `📄 Total URL content: ${urlContent.length.toLocaleString()} characters`
+      );
+    }
   } catch (error) {
     console.error("❌ Batch URL processing error:", error);
-    res.write(JSON.stringify({
-      type: "url_processing",
-      status: "error",
-      error: "Failed to process URLs in batch",
-      details: error.message
-    }) + "\n");
+    res.write(
+      JSON.stringify({
+        type: "url_processing",
+        status: "error",
+        error: "Failed to process URLs in batch",
+        details: error.message,
+      }) + "\n"
+    );
   }
 
   return { urlData, urlContent, processedUrls, fullUserMessage };
 }
-
-
 
 // ✅ HELPER FUNCTION: ROLLBACK PENDING FILES
 async function rollbackPendingFiles(fileIds) {
@@ -1094,13 +2786,15 @@ async function rollbackPendingFiles(fileIds) {
 
   try {
     console.log(`🔄 Rolling back ${fileIds.length} pending files...`);
-    
+
     // Delete from database
     await executeQuery(
-      `DELETE FROM uploaded_files WHERE id IN (${fileIds.map(() => '?').join(',')}) AND status = 'pending_response'`,
+      `DELETE FROM uploaded_files WHERE id IN (${fileIds
+        .map(() => "?")
+        .join(",")}) AND status = 'pending_response'`,
       fileIds
     );
-    
+
     console.log(`✅ Successfully rolled back ${fileIds.length} pending files`);
   } catch (error) {
     console.error("❌ Failed to rollback pending files:", error);
@@ -1115,13 +2809,15 @@ async function confirmPendingFiles(fileIds) {
 
   try {
     console.log(`✅ Confirming ${fileIds.length} pending files...`);
-    
+
     // Update status to confirmed
     await executeQuery(
-      `UPDATE uploaded_files SET status = 'confirmed' WHERE id IN (${fileIds.map(() => '?').join(',')}) AND status = 'pending_response'`,
+      `UPDATE uploaded_files SET status = 'confirmed' WHERE id IN (${fileIds
+        .map(() => "?")
+        .join(",")}) AND status = 'pending_response'`,
       fileIds
     );
-    
+
     console.log(`✅ Successfully confirmed ${fileIds.length} files`);
   } catch (error) {
     console.error("❌ Failed to confirm pending files:", error);
@@ -1164,15 +2860,19 @@ async function getConversationContextOptimized(conversation_id, user_id) {
       const conversationName = results[0]?.conversation_name;
 
       // Check if rename needed
-      if (conversationName === "New Conversation" || 
-          conversationName === "New Chat" || 
-          !conversationName) {
+      if (
+        conversationName === "New Conversation" ||
+        conversationName === "New Chat" ||
+        !conversationName
+      ) {
         shouldRename = true;
       }
 
       // ⚡ Priority: Use latest summarized_chat first
-      const latestSummary = results.find(r => r.summarized_chat)?.summarized_chat;
-      
+      const latestSummary = results.find(
+        (r) => r.summarized_chat
+      )?.summarized_chat;
+
       if (latestSummary) {
         summaryContext = latestSummary;
         console.log("✅ Using existing summary for context");
@@ -1184,8 +2884,10 @@ async function getConversationContextOptimized(conversation_id, user_id) {
           .reverse()
           .map((item) => {
             let context = "";
-            if (item.user_message) context += `User: ${item.user_message.substring(0, 150)}\n`;
-            if (item.response) context += `AI: ${item.response.substring(0, 150)}\n`;
+            if (item.user_message)
+              context += `User: ${item.user_message.substring(0, 150)}\n`;
+            if (item.response)
+              context += `AI: ${item.response.substring(0, 150)}\n`;
             return context;
           })
           .join("");
@@ -1208,7 +2910,6 @@ async function getConversationContextOptimized(conversation_id, user_id) {
   }
 }
 
-  
 // ✅ ALWAYS FULL CONTEXT: No truncation, no token limits for files
 // ✅ ALWAYS FULL CONTEXT: No truncation, no token limits for files
 // async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage) {
@@ -1225,14 +2926,14 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 //     // Get ALL files - no status filtering
 //     const allFiles = await executeQuery(
 //       `SELECT file_path, extracted_text, file_metadata, created_at, status
-//        FROM uploaded_files 
-//        WHERE conversation_id = ? AND user_id = ? 
+//        FROM uploaded_files
+//        WHERE conversation_id = ? AND user_id = ?
 //        ORDER BY created_at DESC`,
 //       [conversation_id, user_id]
 //     );
 
 //     console.log(`🔍 Found ${allFiles.length} total files in conversation`);
-    
+
 //     const fileNames = [];
 //     const validFiles = [];
 
@@ -1251,20 +2952,20 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 //         fileNames.push(fileName);
 
 //         // ✅ INCLUDE ALL FILES WITH ANY VALID CONTENT
-//         if (file.extracted_text && 
-//             file.extracted_text !== "No readable content extracted" && 
+//         if (file.extracted_text &&
+//             file.extracted_text !== "No readable content extracted" &&
 //             file.extracted_text !== "Text extraction failed" &&
 //             file.extracted_text !== "[Error extracting text]" &&
 //             file.extracted_text !== "Success" && // ✅ EXCLUDE "Success" placeholder
 //             file.extracted_text.trim().length > 10) {
-          
-//           validFiles.push({ 
-//             ...file, 
+
+//           validFiles.push({
+//             ...file,
 //             fileName,
 //             isNew: file.status === 'pending_response',
 //             contentLength: file.extracted_text.length
 //           });
-          
+
 //           console.log(`✅ Including file: ${fileName} (${file.extracted_text.length} chars)`);
 //         } else {
 //           console.log(`❌ Skipping file with no content: ${fileName} - extracted_text: "${file.extracted_text?.substring(0, 50)}..."`);
@@ -1274,7 +2975,7 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 
 //     // ✅ ALWAYS PROVIDE FULL CONTEXT - No conditions, no limits
 //     let fullContext = "";
-    
+
 //     // ✅ REMOVE THIS SECTION - Don't use extracted_summary for new uploads
 //     // Instead, get the actual extracted text from the most recent file
 //     if (hasNewUpload) {
@@ -1286,7 +2987,7 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 //         console.log(`📄 Using actual extracted text from new file: ${mostRecentFile.extracted_text.length} characters`);
 //       }
 //     }
-    
+
 //     // ✅ ADD ALL EXISTING FILES - COMPLETE CONTENT, NO TRUNCATION
 //     if (validFiles.length > 0) {
 //       const fileContexts = validFiles.map(file => {
@@ -1303,7 +3004,7 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 
 //     const totalChars = fullContext.length;
 //     const estimatedTokens = Math.ceil(totalChars / 4);
-    
+
 //     console.log(`📄 COMPLETE FILE CONTEXT PROVIDED:`);
 //     console.log(`   - Files: ${validFiles.length}`);
 //     console.log(`   - Total Characters: ${totalChars.toLocaleString()}`);
@@ -1337,14 +3038,14 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 //     // Get ALL files from database - simple query
 //     const allFiles = await executeQuery(
 //       `SELECT file_path, extracted_text, file_metadata, created_at, status
-//        FROM uploaded_files 
-//        WHERE conversation_id = ? AND user_id = ? 
+//        FROM uploaded_files
+//        WHERE conversation_id = ? AND user_id = ?
 //        ORDER BY created_at DESC`,
 //       [conversation_id, user_id]
 //     );
 
 //     console.log(`🔍 Found ${allFiles.length} total files in conversation`);
-    
+
 //     const fileNames = [];
 //     let fullContext = "";
 //     let validFileCount = 0;
@@ -1366,17 +3067,17 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 
 //         // ✅ SIMPLE: Include file if it has valid extracted text
 //       // Replace the complex filtering with this simple check:
-// if (file.extracted_text && 
+// if (file.extracted_text &&
 //     file.extracted_text.trim().length > 50 && // Increase minimum length
 //     !file.extracted_text.includes("extraction failed") &&
 //     !file.extracted_text.includes("No readable content")) {
-    
+
 //     validFileCount++;
 //     const statusInfo = file.status === 'pending_response' ? ' [JUST UPLOADED]' : '';
-    
+
 //     // ✅ Add the full extracted text
 //     fullContext += `📎 FILE: ${fileName}${statusInfo}\n${file.extracted_text}\n\n${'='.repeat(50)}\n\n`;
-    
+
 //     console.log(`✅ Added file: ${fileName} (${file.extracted_text.length} chars)`);
 //     console.log(`📄 First 200 chars: ${file.extracted_text.substring(0, 200)}`);
 // } else {
@@ -1404,10 +3105,20 @@ async function getConversationContextOptimized(conversation_id, user_id) {
 //   }
 // }
 
- // ✅ SIMPLE: Always get full file context from database with NEW FILE PRIORITY
-async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_summary, userMessage) {
+// ✅ SIMPLE: Always get full file context from database with NEW FILE PRIORITY
+async function getFileContextBasedOnUpload(
+  conversation_id,
+  user_id,
+  extracted_summary,
+  userMessage
+) {
   if (!conversation_id || isNaN(conversation_id)) {
-    return { fileContext: "", fileNames: [], fileCount: 0, contextType: "none" };
+    return {
+      fileContext: "",
+      fileNames: [],
+      fileCount: 0,
+      contextType: "none",
+    };
   }
 
   try {
@@ -1423,21 +3134,26 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
     );
 
     console.log(`🔍 Found ${allFiles.length} total files in conversation`);
-    
+
     const fileNames = [];
     let fullContext = "";
     let validFileCount = 0;
 
     // ✅ CHECK IF THERE'S A NEW UPLOAD
-    const hasNewUpload = (extracted_summary && 
-                         extracted_summary.trim().length > 50 && 
-                         extracted_summary !== "Success" && 
-                         !extracted_summary.includes("extraction failed"));
+    const hasNewUpload =
+      extracted_summary &&
+      extracted_summary.trim().length > 50 &&
+      extracted_summary !== "Success" &&
+      !extracted_summary.includes("extraction failed");
 
     // ✅ PRIORITY 1: Add new upload first if exists
     if (hasNewUpload) {
-      fullContext += `🆕 NEWLY UPLOADED FILE (PRIORITY):\n${extracted_summary}\n\n${'='.repeat(60)}\n\n`;
-      console.log(`✅ Added NEW UPLOAD as priority: ${extracted_summary.length} chars`);
+      fullContext += `🆕 NEWLY UPLOADED FILE (PRIORITY):\n${extracted_summary}\n\n${"=".repeat(
+        60
+      )}\n\n`;
+      console.log(
+        `✅ Added NEW UPLOAD as priority: ${extracted_summary.length} chars`
+      );
     }
 
     // ✅ PRIORITY 2: Add existing files (excluding the new one if it exists)
@@ -1448,58 +3164,78 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
         if (file.file_metadata) {
           try {
             const metadata = JSON.parse(file.file_metadata);
-            fileName = metadata.original_filename || metadata.display_filename || fileName;
+            fileName =
+              metadata.original_filename ||
+              metadata.display_filename ||
+              fileName;
           } catch (e) {
-            fileName = file.file_path?.split('/').pop() || fileName;
+            fileName = file.file_path?.split("/").pop() || fileName;
           }
         }
         fileNames.push(fileName);
 
         // ✅ Include file if it has valid extracted text
-        if (file.extracted_text && 
-            file.extracted_text.trim().length > 50 && 
-            !file.extracted_text.includes("extraction failed") &&
-            !file.extracted_text.includes("No readable content")) {
-            
-            // ✅ SKIP if this is the same as new upload (avoid duplication)
-            if (hasNewUpload && file.extracted_text === extracted_summary) {
-              console.log(`⏭️ Skipped duplicate: ${fileName} (already added as new upload)`);
-              return;
-            }
-            
-            validFileCount++;
-            const statusInfo = file.status === 'pending_response' ? ' [RECENT]' : ' [PREVIOUS]';
-            
-            // ✅ Add as previous file context
-            fullContext += `📎 FILE: ${fileName}${statusInfo}\n${file.extracted_text}\n\n${'='.repeat(50)}\n\n`;
-            
-            console.log(`✅ Added previous file: ${fileName} (${file.extracted_text.length} chars)`);
+        if (
+          file.extracted_text &&
+          file.extracted_text.trim().length > 50 &&
+          !file.extracted_text.includes("extraction failed") &&
+          !file.extracted_text.includes("No readable content")
+        ) {
+          // ✅ SKIP if this is the same as new upload (avoid duplication)
+          if (hasNewUpload && file.extracted_text === extracted_summary) {
+            console.log(
+              `⏭️ Skipped duplicate: ${fileName} (already added as new upload)`
+            );
+            return;
+          }
+
+          validFileCount++;
+          const statusInfo =
+            file.status === "pending_response" ? " [RECENT]" : " [PREVIOUS]";
+
+          // ✅ Add as previous file context
+          fullContext += `📎 FILE: ${fileName}${statusInfo}\n${
+            file.extracted_text
+          }\n\n${"=".repeat(50)}\n\n`;
+
+          console.log(
+            `✅ Added previous file: ${fileName} (${file.extracted_text.length} chars)`
+          );
         } else {
-            console.log(`❌ Skipped file: ${fileName} - invalid extracted text`);
+          console.log(`❌ Skipped file: ${fileName} - invalid extracted text`);
         }
       });
     }
 
     // ✅ Add header for previous files if new upload exists
     if (hasNewUpload && validFileCount > 0) {
-      fullContext = fullContext.replace('📎 FILE:', '\n📚 PREVIOUS FILES FOR REFERENCE:\n\n📎 FILE:');
+      fullContext = fullContext.replace(
+        "📎 FILE:",
+        "\n📚 PREVIOUS FILES FOR REFERENCE:\n\n📎 FILE:"
+      );
     }
 
     console.log(`📄 PRIORITIZED FILE CONTEXT:`);
-    console.log(`   - New Upload: ${hasNewUpload ? 'YES (PRIORITY)' : 'No'}`);
+    console.log(`   - New Upload: ${hasNewUpload ? "YES (PRIORITY)" : "No"}`);
     console.log(`   - Previous Files: ${validFileCount}`);
-    console.log(`   - Total Characters: ${fullContext.length.toLocaleString()}`);
+    console.log(
+      `   - Total Characters: ${fullContext.length.toLocaleString()}`
+    );
 
     return {
       fileContext: fullContext.trim(),
       fileNames: fileNames,
       fileCount: validFileCount + (hasNewUpload ? 1 : 0),
-      contextType: hasNewUpload ? "new_upload_priority" : "existing_files_only"
+      contextType: hasNewUpload ? "new_upload_priority" : "existing_files_only",
     };
-
   } catch (error) {
     console.error("❌ Error getting file context:", error);
-    return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
+    return {
+      fileContext: "",
+      fileNames: [],
+      fileCount: 0,
+      contextType: "error",
+    };
   }
 }
 
@@ -1507,7 +3243,7 @@ async function getFileContextBasedOnUpload(conversation_id, user_id, extracted_s
 function checkIfAskingAboutFiles(userMessage) {
   // ✅ ALWAYS return true if there are files - AI should always have context
   return true; // Simple: always provide file context if files exist
-  
+
   // Alternative: Keep detection but make it more inclusive
   /*
   if (!userMessage) return true; // Default to providing context
@@ -1524,19 +3260,33 @@ function checkIfAskingAboutFiles(userMessage) {
   */
 }
 
-
-
- 
-
- 
-
-
 // ✅ UPDATED: Include URL content in AI context
-function buildAIMessagesWithSmartContext(summaryContext, extracted_summary, userMessage, userInfo = null, fileNames = [], fileContext = "", contextType = "none", urlContent = "") {
+function buildAIMessagesWithSmartContext(
+  summaryContext,
+  extracted_summary,
+  userMessage,
+  userInfo = null,
+  fileNames = [],
+  fileContext = "",
+  contextType = "none",
+  urlContent = ""
+) {
   const currentDate = new Date().toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
     day: "numeric",
+  });
+
+  // ✅ INTELLIGENT FILE CREATION ANALYSIS
+  const fileAnalysis = getCachedFileAnalysis(userMessage);
+
+  console.log(`🧠 AI File Analysis:`, {
+    shouldCreate: fileAnalysis.shouldCreateFile,
+    confidence: fileAnalysis.confidence,
+    fileType: fileAnalysis.fileType,
+    intent: fileAnalysis.intent,
+    verbs: fileAnalysis.analysis.verbs,
+    nouns: fileAnalysis.analysis.nouns,
   });
 
   // Build user context for personalized responses
@@ -1545,31 +3295,165 @@ function buildAIMessagesWithSmartContext(summaryContext, extracted_summary, user
     userContext = `The user's name is ${userInfo.username}. When greeting or addressing the user, you can use their name for a more personalized experience.`;
   }
 
-  const systemPrompt = {
-    role: "system",
-    content: `You are QhashAI — a highly intelligent AI assistant created by the QuantumHash development team in 2024.
+  // ✅ CLEARER FILE GENERATION INSTRUCTIONS
+  const enhancedFileGenerationInstructions = `
+🎯 INTELLIGENT FILE CREATION SYSTEM:
+
+DETECTION RULES:
+- Analyze user intent beyond keywords
+- Look for creation verbs: create, make, generate, write, draft, prepare, build
+- Identify document nouns: file, document, letter, application, resume, report, invoice, contract
+- Consider context and user's specific needs
+
+WHEN TO CREATE FILES:
+✅ HIGH CONFIDENCE (Always create):
+- "Create a PDF of..."
+- "Generate a Word document for..."
+- "Make me a resume"
+- "Draft a letter to..."
+- "Prepare an invoice"
+
+✅ MEDIUM CONFIDENCE (Create with explanation):
+- "I need a leave application"
+- "Help me write a report"
+- "Can you make a contract"
+
+❌ DON'T CREATE (Information requests):
+- "How to create a PDF"
+- "What is a resume"
+- "Explain document types"
+- "Tell me about..."
+
+FILE CREATION FORMAT:
+[CREATE_FILE:type:filename:content]
+
+SUPPORTED TYPES: pdf, docx, xlsx, txt
+
+CONTENT FORMATTING RULES:
+- Write content with natural line breaks - DO NOT use \\n
+- For HTML/CSS content, ALWAYS wrap in code blocks: \`\`\`html ... \`\`\`
+- Use **text** for bold headings
+- Include complete, professional content with proper structure
+- No file extensions in filename
+- Ensure content is substantial (minimum 100 characters)
+- Format content naturally like you would in a normal response
+
+SPECIAL HANDLING FOR CODE/HTML:
+- When creating HTML files, save as .txt but include complete HTML structure
+- Preserve proper indentation and formatting for code
+- Don't escape HTML tags in file content - keep them as valid HTML
+
+EXAMPLE FOR HTML:
+User: "Create an HTML file for Hello World"
+Response: "I'll create an HTML file with CSS styling for a Hello World page.
+
+[CREATE_FILE:txt:hello_world_html:\`\`\`html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello World</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 50px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hello World!</h1>
+    <p>Welcome to my webpage</p>
+</body>
+</html>
+\`\`\`]
+
+Your HTML file has been created with proper structure and styling."
+RESPONSE STYLE:
+1. First acknowledge: "I'll create [document type] for you."
+2. Then create the file with [CREATE_FILE:...]
+3. Provide brief context about the document
+
+EXAMPLE:
+User: "Create a leave application for John Doe"
+Response: "I'll create a professional leave application for John Doe.
+
+[CREATE_FILE:docx:Leave_Application_John_Doe:**LEAVE APPLICATION**
+
+**To:** [Principal/Manager Name]
+**From:** John Doe
+**Date:** [Current Date]
+**Subject:** Application for Leave
+
+Respected Sir/Madam,
+
+I am writing to formally request leave from [Start Date] to [End Date] due to [Reason for leave].
+
+I have ensured that all my current projects and responsibilities will be properly managed during my absence. I will coordinate with my team members to ensure smooth workflow continuation.
+
+I would be grateful if you could approve my leave request. I will be available via email for any urgent matters that may require my attention.
+
+Thank you for your understanding and consideration.
+
+**Sincerely,**
+**John Doe**
+**[Position]**
+**[Contact Information]**
+**[Employee ID]**]
+
+Your professional leave application document has been created and is ready for download."
+
+CRITICAL: Write content naturally with proper line breaks. Never use \\n sequences.
+CRITICAL: Write content naturally with proper formatting. For HTML content, preserve all tags and structure.
+`;
+  let systemPrompt;
+
+  if (fileAnalysis.shouldCreateFile) {
+    systemPrompt = {
+      role: "system",
+      content: `You are QhashAI — an intelligent AI assistant by QuantumHash team (2024).
 
 Current date: ${currentDate}.
-
 ${userContext}
 
-When asked your name: "My name is QhashAI."
-Developer: "I was developed by the QuantumHash development team."
+🎯 FILE CREATION MODE ACTIVATED (Confidence: ${fileAnalysis.confidence}%)
 
-You can analyze content from URLs and documents. When referencing external content, cite your sources clearly.
+ANALYSIS RESULTS:
+- Intent: ${fileAnalysis.intent}
+- Recommended file type: ${fileAnalysis.fileType}
+- User wants: ${fileAnalysis.analysis.verbs.join(
+        ", "
+      )} ${fileAnalysis.analysis.nouns.join(", ")}
 
-You have access to the complete content of all uploaded files and URL content. Use this information to provide detailed, accurate responses.
+${enhancedFileGenerationInstructions}
 
-For product comparisons, analyze specifications, prices, features, and provide comprehensive comparisons.
+RESPONSE STRATEGY:
+1. Acknowledge the file creation request professionally
+2. Create the file using [CREATE_FILE:type:filename:content] format
+3. Ensure content is complete, professional, and properly formatted
+4. Use business-appropriate language and structure
+5. Include all necessary sections and details
 
-Be helpful, accurate, professional, and use all available context to provide the best possible response.`+ `
+Remember: The user specifically wants a file created. Don't just provide information - CREATE THE ACTUAL FILE.`,
+    };
+  } else {
+    systemPrompt = {
+      role: "system",
+      content: `You are QhashAI — an intelligent AI assistant by QuantumHash team (2024).
 
-Respond in a clear, engaging, and friendly tone. Use appropriate emojis 🎯✨😄 where helpful to highlight key points, actions, or emotions. Format your responses cleanly using line breaks, bullet points, and markdown for better readability. 
+Current date: ${currentDate}.
+${userContext}
 
-**Ensure your responses are visually appealing, easy to scan, and interactive — use structured formatting, rich language, and helpful visual cues (like bold text, emojis, or bullet points) to enhance user understanding and engagement.**
-`
-,
-  };
+💬 CONVERSATION MODE (File creation not detected)
+
+You can analyze content from URLs and documents. When referencing external content, cite sources clearly.
+
+Be helpful, accurate, professional, and engaging. Use appropriate emojis and formatting for better readability.
+
+If the user later asks for file creation, you can create documents using the [CREATE_FILE:type:filename:content] format.`,
+    };
+  }
 
   const finalMessages = [systemPrompt];
 
@@ -1581,13 +3465,15 @@ Respond in a clear, engaging, and friendly tone. Use appropriate emojis 🎯✨�
     });
   }
 
-   // ✅ ADD URL CONTENT FIRST (for product comparisons)
+  // ✅ ADD URL CONTENT FIRST (for product comparisons)
   if (urlContent && urlContent.length > 0) {
     finalMessages.push({
       role: "system",
       content: `WEBSITE CONTENT FOR ANALYSIS:\n${urlContent}`,
     });
-    console.log(`🔗 Added URL content: ${urlContent.length.toLocaleString()} characters`);
+    console.log(
+      `🔗 Added URL content: ${urlContent.length.toLocaleString()} characters`
+    );
   }
 
   // ✅ ADD COMPLETE FILE CONTEXT - NO LIMITS
@@ -1596,12 +3482,17 @@ Respond in a clear, engaging, and friendly tone. Use appropriate emojis 🎯✨�
       role: "system",
       content: `COMPLETE FILE CONTENT:\n${fileContext}`,
     });
-    console.log(`📄 Added COMPLETE file context: ${fileContext.length.toLocaleString()} characters`);
+    console.log(
+      `📄 Added COMPLETE file context: ${fileContext.length.toLocaleString()} characters`
+    );
     // console.log(`📄 First 300 chars of context: ${fileContext.substring(0, 300)}`);
   }
-// Add this debug line in buildAIMessagesWithSmartContext
-console.log("🔍 DEBUG - fileContext parameter:", fileContext?.substring(0, 200));
-console.log("🔍 DEBUG - fileContext length:", fileContext?.length);
+  // Add this debug line in buildAIMessagesWithSmartContext
+  console.log(
+    "🔍 DEBUG - fileContext parameter:",
+    fileContext?.substring(0, 200)
+  );
+  console.log("🔍 DEBUG - fileContext length:", fileContext?.length);
 
   // Add current document context if available (new upload)
   // if (extracted_summary && extracted_summary !== "Success" && extracted_summary !== "No readable content") {
@@ -1615,62 +3506,343 @@ console.log("🔍 DEBUG - fileContext length:", fileContext?.length);
   finalMessages.push({ role: "user", content: userMessage || "" });
 
   // ✅ LOG TOTAL CONTEXT SIZE
-  const totalContextLength = finalMessages.reduce((total, msg) => total + msg.content.length, 0);
+  const totalContextLength = finalMessages.reduce(
+    (total, msg) => total + msg.content.length,
+    0
+  );
   const estimatedTokens = Math.ceil(totalContextLength / 4);
-  
+
   console.log(`🧠 AI Context Summary:`);
   console.log(`   - Total Messages: ${finalMessages.length}`);
   console.log(`   - Total Characters: ${totalContextLength.toLocaleString()}`);
   console.log(`   - Estimated Tokens: ${estimatedTokens.toLocaleString()}`);
-  console.log(`   - URL Content: ${urlContent ? 'INCLUDED' : 'None'}`);
-  console.log(`   - File Context: ${fileContext ? 'FULL CONTENT' : 'None'}`);
+  console.log(`   - URL Content: ${urlContent ? "INCLUDED" : "None"}`);
+  console.log(`   - File Context: ${fileContext ? "FULL CONTENT" : "None"}`);
 
   return finalMessages;
 }
+const fileAnalysisCache = new Map();
+const CACHE_TTL = 300000; // 5 minutes
+
+function getCachedFileAnalysis(userMessage) {
+  const key = userMessage.toLowerCase().trim();
+  const cached = fileAnalysisCache.get(key);
+
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.analysis;
+  }
+
+  const analysis = intelligentFileDetectionAnalysis(userMessage);
+  fileAnalysisCache.set(key, {
+    analysis,
+    timestamp: Date.now(),
+  });
+
+  // Clean cache periodically
+  if (fileAnalysisCache.size > 100) {
+    const oldEntries = Array.from(fileAnalysisCache.entries()).filter(
+      ([_, value]) => Date.now() - value.timestamp > CACHE_TTL
+    );
+    oldEntries.forEach(([key]) => fileAnalysisCache.delete(key));
+  }
+
+  return analysis;
+}
+
+function logAIPerformance(startTime, operation, details = {}) {
+  const duration = Date.now() - startTime;
+  const emoji = duration < 1000 ? "⚡" : duration < 3000 ? "🚀" : "⏱️";
+
+  console.log(`${emoji} ${operation}: ${duration}ms`, details);
+
+  // Log slow operations for optimization
+  if (duration > 5000) {
+    console.warn(`🐌 SLOW OPERATION: ${operation} took ${duration}ms`, details);
+  }
+}
+
+// ✅ SIMPLE: AI File Generation Handler
+const handleAIFileGeneration = async (
+  aiResponse,
+  conversation_id,
+  user_id,
+  res
+) => {
+  console.log(`🔍 Smart file generation check...`);
+
+  const generatedFiles = [];
+  let cleanedResponse = aiResponse;
+  const FileGenerator = require("../utils/fileGenerator");
+
+  console.log(`🔍 Searching for CREATE_FILE in ${aiResponse.length} chars`);
+  console.log(`🔍 Raw response contains CREATE_FILE: ${aiResponse.includes('[CREATE_FILE:')}`);
+
+  // ✅ FIXED: Manual parsing to handle content with brackets properly
+  const createFileMatches = [];
+  let searchText = aiResponse;
+  
+  while (searchText.includes('[CREATE_FILE:')) {
+    const startIndex = searchText.indexOf('[CREATE_FILE:');
+    if (startIndex === -1) break;
+    
+    // Find the matching closing bracket by counting brackets
+    let endIndex = -1;
+    let bracketCount = 0;
+    let inContent = false;
+    let colonCount = 0;
+    
+    for (let i = startIndex; i < searchText.length; i++) {
+      const char = searchText[i];
+      
+      if (char === '[') {
+        bracketCount++;
+      } else if (char === ']') {
+        bracketCount--;
+        // Only close if we're at bracket count 0 and we've seen at least 2 colons (type:filename:content)
+        if (bracketCount === 0 && colonCount >= 2) {
+          endIndex = i;
+          break;
+        }
+      } else if (char === ':' && bracketCount === 1 && !inContent) {
+        colonCount++;
+        if (colonCount === 2) {
+          inContent = true; // Now we're in the content section
+        }
+      }
+    }
+    
+    if (endIndex === -1) {
+      // If no proper closing bracket found, take everything till the end
+      endIndex = searchText.length - 1;
+    }
+    
+    const fullTag = searchText.substring(startIndex, endIndex + 1);
+    createFileMatches.push(fullTag);
+    
+    console.log(`🔍 Extracted full tag (${fullTag.length} chars): ${fullTag.substring(0, 200)}...`);
+    
+    // Remove this match and continue searching
+    searchText = searchText.substring(endIndex + 1);
+    
+    if (createFileMatches.length >= 5) break; // Safety limit
+  }
+
+  console.log(`🔍 Found ${createFileMatches.length} CREATE_FILE tags`);
+
+  let fileCount = 0;
+  for (const fullTag of createFileMatches) {
+    if (fileCount >= 5) break;
+    fileCount++;
+    
+    console.log(`📝 Processing file ${fileCount}:`);
+    console.log(`   - Full tag length: ${fullTag.length} chars`);
+    console.log(`   - Tag preview: ${fullTag.substring(0, 100)}...`);
+    
+    let fileType = '';
+    let filename = '';
+    let content = '';
+    
+    try {
+      // ✅ FIXED: Proper parsing - remove only the brackets, not the CREATE_FILE: part
+      const tagContent = fullTag.slice(1, -1); // Remove [ and ]
+      console.log(`   - Tag content after bracket removal: ${tagContent.substring(0, 100)}...`);
+      
+      // Now remove CREATE_FILE: prefix
+      if (!tagContent.startsWith('CREATE_FILE:')) {
+        throw new Error('Invalid CREATE_FILE format: missing CREATE_FILE prefix');
+      }
+      
+      const contentAfterPrefix = tagContent.substring(12); // Remove 'CREATE_FILE:'
+      console.log(`   - Content after prefix removal: ${contentAfterPrefix.substring(0, 100)}...`);
+      
+      // Find first colon for file type
+      const firstColonIndex = contentAfterPrefix.indexOf(':');
+      if (firstColonIndex === -1) {
+        throw new Error('Invalid CREATE_FILE format: missing type separator');
+      }
+      
+      fileType = contentAfterPrefix.substring(0, firstColonIndex).trim();
+      
+      // Find second colon for filename
+      const remainingAfterType = contentAfterPrefix.substring(firstColonIndex + 1);
+      const secondColonIndex = remainingAfterType.indexOf(':');
+      if (secondColonIndex === -1) {
+        throw new Error('Invalid CREATE_FILE format: missing filename separator');
+      }
+      
+      filename = remainingAfterType.substring(0, secondColonIndex).trim();
+      content = remainingAfterType.substring(secondColonIndex + 1); // Don't trim here to preserve formatting
+      
+      console.log(`   - Type: "${fileType}"`);
+      console.log(`   - Filename: "${filename}"`);
+      console.log(`   - Raw content length: ${content.length} chars`);
+      console.log(`   - Raw content preview: "${content.substring(0, 150)}..."`);
+
+      // ✅ FAST VALIDATION
+      if (!fileType || !filename || content.length < 20) {
+        throw new Error(
+          `Invalid file data: type=${fileType}, name=${filename}, content=${content.length}chars`
+        );
+      }
+
+      // ✅ OPTIMIZED CONTENT PROCESSING
+      const cleanFilename = filename
+        .replace(/\.(pdf|docx|xlsx|txt)$/i, "")
+        .replace(/[^a-zA-Z0-9_\-\s]/g, "");
+
+      // ✅ FIXED: Proper content decoding with better newline handling
+      const decodedContent = content
+        .replace(/\\n\\n/g, "\n\n")  // Double newlines first
+        .replace(/\\n/g, "\n")       // Then single newlines
+        .replace(/\\t/g, "\t")
+        .replace(/\\\"/g, '"')
+        .replace(/\\\'/g, "'")
+        .replace(/\\r/g, "\r")
+        .trim(); // Only trim at the end
+
+      console.log(`   - Decoded content length: ${decodedContent.length} chars`);
+      console.log(`   - Decoded preview: "${decodedContent.substring(0, 200)}..."`);
+
+      if (decodedContent.length < 30) {
+        throw new Error(
+          `Content too short after decoding: ${decodedContent.length} characters`
+        );
+      }
+
+      // ✅ IMMEDIATE FILE GENERATION (no delays)
+      console.log(`⚡ Generating ${fileType} file: ${cleanFilename}`);
+
+      const fileResult = await FileGenerator.generateFromAI(
+        fileType,
+        decodedContent,
+        cleanFilename,
+        conversation_id,
+        user_id
+      );
+
+      if (fileResult.success) {
+        generatedFiles.push(fileResult);
+
+        // ✅ PARALLEL DATABASE SAVE (don't wait)
+        saveGeneratedFileToDatabase(
+          fileResult,
+          conversation_id,
+          user_id,
+          decodedContent
+        ).catch((err) => console.error("❌ DB save failed:", err));
+
+        // ✅ PROFESSIONAL REPLACEMENT
+        const displayName = fileResult.originalFilename || cleanFilename;
+        const downloadLink = `\n\n📄 **${displayName}.${fileType}** - Professional document created!\n🔗 [**Download ${displayName}**](${fileResult.downloadUrl})\n`;
+        cleanedResponse = cleanedResponse.replace(fullTag, downloadLink);
+
+        console.log(
+          `✅ File created: ${fileResult.filename}`
+        );
+
+        // ✅ IMMEDIATE FRONTEND NOTIFICATION
+        res.write(
+          JSON.stringify({
+            type: "file_ready",
+            filename: displayName,
+            download_url: fileResult.downloadUrl,
+            file_type: fileType,
+          }) + "\n"
+        );
+      } else {
+        throw new Error(fileResult.error || "File generation failed");
+      }
+    } catch (error) {
+      console.error(`❌ File ${fileCount} creation failed:`, error.message);
+
+      const cleanFilename = filename?.replace(/\.(pdf|docx|xlsx|txt)$/i, "") || `file_${fileCount}`;
+      cleanedResponse = cleanedResponse.replace(
+        fullTag,
+        `\n❌ **Could not create ${cleanFilename}.${fileType || 'docx'}**\n*Error: ${error.message}*\n`
+      );
+
+      // ✅ IMMEDIATE ERROR NOTIFICATION
+      res.write(
+        JSON.stringify({
+          type: "file_error",
+          filename: cleanFilename,
+          error: error.message,
+          file_type: fileType || 'docx',
+        }) + "\n"
+      );
+    }
+  }
+
+  console.log(
+    `🎯 File generation completed: ${generatedFiles.length}/${fileCount} successful`
+  );
+
+  return {
+    hasGeneratedFiles: generatedFiles.length > 0,
+    cleanedResponse,
+    generatedFiles,
+  };
+};
 
 
 
 
 
 
-// 🚀 OPTIMIZED FAST SUGGESTIONS
-// async function generateFastSuggestions(userMessage) {
-//   try {
-//     const suggestionResult = await deepseek.chat.completions.create({
-//       model: "deepseek-chat",
-//       messages: [
-//         {
-//           role: "system",
-//           content: "Generate 5 short follow-up questions. Reply only with numbered list.",
-//         },
-//         { role: "user", content: userMessage || "Continue the conversation" },
-//       ],
-//       temperature: 0.8,
-//       max_tokens: 80, // Reduced for speed
-//     });
+// ✅ FIXED: Database save function
+const saveGeneratedFileToDatabase = async (
+  fileData,
+  conversation_id,
+  user_id,
+  originalTextContent = null
+) => {
+  try {
+    const metadata = {
+      original_filename: fileData.originalFilename || fileData.filename,
+      actual_filename: fileData.filename,
+      file_size: fileData.size,
+      mime_type: fileData.mimeType,
+      ai_generated: true,
+      created_at: new Date().toISOString(),
+      ftp_path: fileData.ftpPath,
+      download_url: fileData.downloadUrl,
+    };
 
-//     const rawSuggestion = suggestionResult.choices?.[0]?.message?.content || "";
-//     return rawSuggestion
-//       .split("\n")
-//       .map((s) => s.replace(/^[\s\d\-•.]+/, "").replace(/[.?!]+$/, "").trim())
-//       .filter(Boolean)
-//       .slice(0, 5);
-//   } catch (error) {
-//     console.error("❌ Fast suggestion failed:", error);
-//     return ["Tell me more about this", "What are the next steps?", "Can you provide more details?"];
-//   }
-// }
-// 🚀 OPTIMIZED FAST SUGGESTIONS - Async function with timeout
+    await executeQuery(
+      `INSERT INTO generated_files 
+       (conversation_id, user_id, filename, file_data, file_metadata, mime_type, file_size, ftp_path, download_url) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        conversation_id,
+        user_id,
+        fileData.filename,
+        originalTextContent || "", // ✅ Store original text with UTF-8 support
+        JSON.stringify(metadata),
+        fileData.mimeType,
+        fileData.size,
+        fileData.ftpPath,
+        fileData.downloadUrl,
+      ]
+    );
+
+    console.log(`✅ File saved to database: ${fileData.filename}`);
+  } catch (error) {
+    console.error(`❌ Database save failed:`, error);
+    throw error;
+  }
+};
+
 async function generateFastSuggestions(userMessage, aiResponse = null) {
   try {
     // Build context from both user message and AI response
     let context = userMessage || "Continue the conversation";
-    
+
     if (aiResponse && aiResponse.trim().length > 20) {
       // Add AI response context (first 500 chars for efficiency)
-      const responsePreview = aiResponse.length > 500 
-        ? aiResponse.substring(0, 500) + "..." 
-        : aiResponse;
+      const responsePreview =
+        aiResponse.length > 500
+          ? aiResponse.substring(0, 500) + "..."
+          : aiResponse;
       context = `User asked: "${userMessage}"\nAI responded: "${responsePreview}"`;
     }
 
@@ -1679,7 +3851,8 @@ async function generateFastSuggestions(userMessage, aiResponse = null) {
       messages: [
         {
           role: "system",
-          content: "Based on the conversation, generate 5 short follow-up questions that the user would naturally ask next. Make them specific to the topics discussed. Reply only with numbered list.",
+          content:
+            "Based on the conversation, generate 5 short follow-up questions that the user would naturally ask next. Make them specific to the topics discussed. Reply only with numbered list.",
         },
         { role: "user", content: context },
       ],
@@ -1690,39 +3863,46 @@ async function generateFastSuggestions(userMessage, aiResponse = null) {
     const rawSuggestion = suggestionResult.choices?.[0]?.message?.content || "";
     return rawSuggestion
       .split("\n")
-      .map((s) => s.replace(/^[\s\d\-•.]+/, "").replace(/[.?!]+$/, "").trim())
+      .map((s) =>
+        s
+          .replace(/^[\s\d\-•.]+/, "")
+          .replace(/[.?!]+$/, "")
+          .trim()
+      )
       .filter(Boolean)
       .slice(0, 5);
   } catch (error) {
     console.error("❌ Fast suggestion failed:", error);
-    return ["Can you explain this further?", "What are some examples?", "How can I apply this?"];
+    return [
+      "Can you explain this further?",
+      "What are some examples?",
+      "How can I apply this?",
+    ];
   }
 }
 
-
-
- 
-// 🚀 OPTIMIZED BACKGROUND TASKS WITH USER VALIDATION AND URL SUPPORT - Async function
-// 🚀 OPTIMIZED BACKGROUND TASKS - FIX PARAMETER ORDER
-async function handleAllBackgroundTasksOptimized(
+// ✅ ENHANCED BACKGROUND TASKS WITH FILE SAVING (Continued)
+async function handleAllBackgroundTasksOptimizedWithFiles(
   conversation_id,
   userMessage,
   aiResponse,
-  extracted_summary,     // ✅ FIX: Move this parameter
+  extracted_summary,
   suggestions,
-  user_id,              // ✅ FIX: Move this parameter
+  user_id,
   shouldRename,
   newConversationName,
   processedUrls = [],
   urlData = [],
   urlContent = "",
   fileContext = "",
-  _file_upload_ids = [] // ✅ Add this parameter
+  _file_upload_ids = [],
+  generatedFiles = null // ✅ New parameter
 ) {
   try {
-    console.log("🔄 Starting optimized background tasks for conversation:", conversation_id, "user:", user_id);
+    console.log(
+      "🔄 Starting enhanced background tasks with file generation support"
+    );
 
-    // ✅ USER VALIDATION IN BACKGROUND TASKS
     if (!user_id || isNaN(user_id)) {
       console.error("❌ Invalid user_id in background tasks:", user_id);
       return;
@@ -1733,17 +3913,24 @@ async function handleAllBackgroundTasksOptimized(
       try {
         const conversationResult = await executeQuery(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-          [user_id, newConversationName || userMessage?.substring(0, 20) || "New Chat"]
+          [
+            user_id,
+            newConversationName || userMessage?.substring(0, 20) || "New Chat",
+          ]
         );
 
         conversation_id = conversationResult.insertId;
-        console.log("✅ Created new conversation:", conversation_id, "for user:", user_id);
+        console.log(
+          "✅ Created new conversation:",
+          conversation_id,
+          "for user:",
+          user_id
+        );
       } catch (convError) {
         console.error("❌ Conversation creation failed:", convError);
         return;
       }
     }
-
 
     // ✅ GET ACTUAL FILE DATA FROM DATABASE
     let uploadedFiles = [];
@@ -1758,224 +3945,155 @@ async function handleAllBackgroundTasksOptimized(
            ORDER BY created_at DESC`,
           [conversation_id, user_id]
         );
-        
+
         uploadedFiles = recentFiles || [];
-        console.log(`📁 Found ${uploadedFiles.length} recent files for chat history`);
+        console.log(
+          `📁 Found ${uploadedFiles.length} recent files for chat history`
+        );
       } catch (fileError) {
         console.error("❌ Error fetching recent files:", fileError);
       }
     }
+
     // 🚀 STEP 2: Parallel background operations with timeout
     const backgroundTasks = [
-      // ✅ PASS ACTUAL FILE DATA TO saveToDatabase
+      // Save to database with generated file info
       Promise.race([
         saveToDatabase(
-          conversation_id, 
-          userMessage, 
-          aiResponse, 
-          uploadedFiles, // ✅ FIX: Pass actual file data
+          conversation_id,
+          userMessage,
+          aiResponse,
+          uploadedFiles,
           extracted_summary,
-          suggestions, 
-          processedUrls, 
-          urlData, 
+          suggestions,
+          processedUrls,
+          urlData,
           fileContext,
-          _file_upload_ids // ✅ Pass file IDs
+          _file_upload_ids,
+          generatedFiles,
+          user_id // ✅ Pass generated file data
         ),
-        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 5000))
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ timeout: true }), 5000)
+        ),
       ]),
 
       // Rename conversation ONLY if needed
       shouldRename
         ? Promise.race([
             executeRename(conversation_id, userMessage, user_id),
-            new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 3000))
+            new Promise((resolve) =>
+              setTimeout(() => resolve({ timeout: true }), 3000)
+            ),
           ])
         : Promise.resolve(false),
 
-       // Generate comprehensive summary with file context
+      // Generate comprehensive summary with file context
       Promise.race([
-        generateAndSaveComprehensiveSummary(conversation_id, userMessage, aiResponse, urlContent, fileContext),
-        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 8000))
+        generateAndSaveComprehensiveSummary(
+          conversation_id,
+          userMessage,
+          aiResponse,
+          urlContent,
+          fileContext
+        ),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ timeout: true }), 8000)
+        ),
       ]),
     ];
 
-    const [dbResult, renameResult, summaryResult] = await Promise.allSettled(backgroundTasks);
+    const [dbResult, renameResult, summaryResult, fileResult] =
+      await Promise.allSettled(backgroundTasks);
 
-    console.log("✅ Optimized background tasks completed:", {
-      database: dbResult.status === "fulfilled" && !dbResult.value?.timeout ? "✅ Saved" : "❌ Failed/Timeout",
+    console.log("✅ Enhanced background tasks completed:", {
+      database:
+        dbResult.status === "fulfilled" && !dbResult.value?.timeout
+          ? "✅ Saved"
+          : "❌ Failed/Timeout",
       rename: shouldRename
-        ? renameResult.status === "fulfilled" && !renameResult.value?.timeout ? "✅ Done" : "❌ Failed/Timeout"
+        ? renameResult.status === "fulfilled" && !renameResult.value?.timeout
+          ? "✅ Done"
+          : "❌ Failed/Timeout"
         : "⏭️ Skipped",
-      summary: summaryResult.status === "fulfilled" && !summaryResult.value?.timeout ? "✅ Generated" : "❌ Failed/Timeout",
+      summary:
+        summaryResult.status === "fulfilled" && !summaryResult.value?.timeout
+          ? "✅ Generated"
+          : "❌ Failed/Timeout",
+      generated_files: generatedFiles // ✅ FIXED variable name
+        ? generatedFiles.length > 0
+          ? "✅ Saved"
+          : "⏭️ No files generated"
+        : "⏭️ No files generated",
       conversation_id: conversation_id,
       user_id: user_id,
       urls_processed: Array.isArray(urlData) ? urlData.length : 0,
     });
   } catch (error) {
-    console.error("❌ Optimized background tasks failed:", error);
+    console.error("❌ Enhanced background tasks failed:", error);
   }
 }
 
+// ✅ NEW: Save all generated files to database
+const saveAllGeneratedFilesToDatabase = async (
+  conversation_id,
+  generatedFiles,
+  user_id
+) => {
+  if (!generatedFiles || generatedFiles.length === 0) return null;
 
- 
-// ✅ FIXED SAVE TO DATABASE FUNCTION
-// async function saveToDatabase(
-//   conversation_id,
-//   userMessage,
-//   aiResponse,
-//   uploadedFiles,
-//   extracted_summary,
-//   suggestions,
-//   processedUrls = [],
-//   urlData = [],
-//   fileContext = ""
-// ) {
-//   try {
-//       // ✅ SIMPLE FIX: Get NEW files directly from database instead of relying on parameter
-//     const newFiles = await executeQuery(
-//       `SELECT file_path, file_metadata, extracted_text, created_at 
-//        FROM uploaded_files 
-//        WHERE conversation_id = ? 
-//        AND status = 'pending_response'
-//        AND created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
-//        ORDER BY created_at DESC`,
-//       [conversation_id]
-//     );
-    
-//     console.log(`📁 Found ${newFiles.length} NEW files with pending_response status`);
+  try {
+    const savedFiles = [];
 
-//     // Prepare file data from CONFIRMED files only
-//     const filePaths = [];
-//     const fileNames = [];
-//     const fileMetadataArray = [];
+    for (const fileData of generatedFiles) {
+      const fileMetadata = {
+        original_filename: fileData.filename,
+        display_filename: fileData.filename,
+        unique_filename: fileData.filename,
+        file_size: fileData.size,
+        mime_type: fileData.mimeType,
+        file_type: "ai_generated",
+        generated_at: new Date().toISOString(),
+        is_ai_generated: true,
+        ftp_path: fileData.ftpPath,
+        download_url: fileData.downloadUrl,
+      };
 
-//   if (newFiles && newFiles.length > 0) {
-//       newFiles.forEach(file => {
-//         if (file.file_path) {
-//           filePaths.push(file.file_path);
-//         }
-        
-//         // Extract file name and metadata
-//         if (file.file_metadata) {
-//           try {
-//             const metadata = JSON.parse(file.file_metadata);
-//             fileNames.push(metadata.original_filename || metadata.display_filename || 'Unknown');
-//             fileMetadataArray.push(file.file_metadata);
-//           } catch (parseError) {
-//             console.error("❌ Error parsing file metadata:", parseError);
-//             fileNames.push('Unknown');
-//           }
-//         } else {
-//           fileNames.push('Unknown');
-//         }
-//       });
-//     }
+      const result = await executeQuery(
+        `INSERT INTO generated_files 
+         (conversation_id, user_id, filename, file_data, file_metadata, mime_type, file_size, ftp_path, download_url, created_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [
+          conversation_id,
+          user_id,
+          fileData.filename,
+          fileData.buffer ? fileData.buffer.toString("base64") : null, // Optional: store buffer
+          JSON.stringify(fileMetadata),
+          fileData.mimeType,
+          fileData.size,
+          fileData.ftpPath,
+          fileData.downloadUrl,
+        ]
+      );
 
-//    // Prepare data for database - ONLY NEW FILES
-//     const filePathsString = filePaths.length > 0 ? filePaths.join(",") : null;
-//     const fileNamesString = fileNames.length > 0 ? fileNames.join(",") : null;
-//     const fileMetadataString = fileMetadataArray.length > 0 ? JSON.stringify(fileMetadataArray) : null;
+      savedFiles.push({
+        id: result.insertId,
+        filename: fileData.filename,
+        download_url: fileData.downloadUrl,
+      });
 
-//      // ✅ IMPROVED URL DATA PROCESSING
-//      // ✅ IMPROVED URL DATA PROCESSING - Save ALL URLs and their metadata
-//     const urlsString = processedUrls.length > 0 ? processedUrls.join(",") : null;
+      console.log(
+        `✅ AI-generated file saved to database: ${fileData.filename}`
+      );
+    }
 
-//    // ✅ Save complete URL content with metadata
-//     const urlContentString = urlData.length > 0
-//       ? urlData.map((data, index) => {
-//           const status = data.error ? 'FAILED' : 'SUCCESS';
-//           const siteType = data.metadata?.siteType || 'unknown';
-//           const contentLength = data.content?.length || 0;
-
-//            // ✅ SAVE FULL CONTENT - NO TRUNCATION
-//           const content = data.content && !data.error
-//             ? data.content // Full content without truncation
-//             : `[ERROR: ${data.error}]`;
-          
-//           return `[URL ${index + 1} - ${status} - ${siteType.toUpperCase()}]
-// URL: ${data.url}
-// Title: ${data.title || 'No title'}
-// Description: ${data.description || 'No description'}
-// Content Length: ${contentLength} characters
-// Site Type: ${siteType}
-
-// Content:
-// ${content}
-
-// ${'='.repeat(100)}`;
-//         }).join("\n\n")
-//       : null;
-
-//     // ✅ Create URL metadata summary
-//     const urlMetadata = urlData.length > 0
-//       ? JSON.stringify(urlData.map(data => ({
-//           url: data.url,
-//           title: data.title,
-//           success: !data.error,
-//           error: data.error || null,
-//           site_type: data.metadata?.siteType,
-//           content_length: data.content?.length || 0,
-//           extraction_method: data.metadata?.extractionMethod,
-//           hostname: data.metadata?.hostname,
-//           processed_at: new Date().toISOString()
-//         })))
-//       : null;
-
-//     // ✅ COMBINE EXTRACTED TEXT WITH URL CONTENT
-//     let allExtractedText = "";
-//     if (extracted_summary) {
-//       allExtractedText += `CURRENT UPLOAD:\n${extracted_summary}\n\n`;
-//     }
-//     if (fileContext) {
-//       allExtractedText += `PREVIOUS FILES:\n${fileContext}\n\n`;
-//     }
-//     if (urlContentString) {
-//       allExtractedText += `URL CONTENT (${urlData.length} URLs):\n${urlContentString}`;
-//     }
-
-
-//     // ✅ UPDATED INSERT QUERY WITH FILE_METADATA
-//      await executeQuery(
-//       `INSERT INTO chat_history 
-//        (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, file_metadata, suggestions, urls, url_content, url_metadata) 
-//        VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`,
-//       [
-//         conversation_id,
-//         userMessage,
-//         aiResponse,
-//         filePathsString, // Only new file paths
-//         allExtractedText || null,
-//         fileNamesString, // Only new file names
-//         fileMetadataString, // Only new file metadata
-//         suggestions && suggestions.length > 0 ? JSON.stringify(suggestions) : null,
-//         urlsString,
-//         urlContentString,
-//         urlMetadata,
-//       ]
-//     );
-
-//  console.log("✅ Database save successful with NEW files only:", {
-//       new_files_found: newFiles.length,
-//       new_file_paths: filePaths,
-//       new_file_names: fileNames,
-//       has_metadata: !!fileMetadataString,
-//       total_urls: processedUrls.length,
-//       successful_urls: urlData.filter(d => !d.error).length,
-//       failed_urls: urlData.filter(d => d.error).length,
-//       url_content_length: urlContentString?.length || 0,
-//       full_content_saved: true,
-//       has_url_metadata: !!urlMetadata
-//     });
-    
-//     return true;
-//   } catch (error) {
-//     console.error("❌ Database save error:", error);
-//     throw error;
-//   }
-// }
-// ✅ FIXED SAVE TO DATABASE FUNCTION
-// ✅ FIXED SAVE TO DATABASE FUNCTION
-// ✅ FIXED SAVE TO DATABASE FUNCTION
+    return savedFiles;
+  } catch (error) {
+    console.error("❌ Failed to save generated files to database:", error);
+    return null;
+  }
+};
+// ✅ ENHANCED SAVE TO DATABASE WITH GENERATED FILE INFO
 async function saveToDatabase(
   conversation_id,
   userMessage,
@@ -1986,21 +4104,27 @@ async function saveToDatabase(
   processedUrls = [],
   urlData = [],
   fileContext = "",
-  _file_upload_ids = [] // ✅ Add this parameter
+  _file_upload_ids = [],
+  generatedFiles = null,
+  user_id = null // ✅ New parameter
 ) {
   try {
-    // ✅ SIMPLE FIX: Only save file data if there are actual file upload IDs
+    // ✅ Handle uploaded files (existing logic)
     let filePaths = [];
     let fileNames = [];
     let fileMetadataArray = [];
-    
-    const hasNewFiles = _file_upload_ids && Array.isArray(_file_upload_ids) && _file_upload_ids.length > 0;
+
+    const hasNewFiles =
+      _file_upload_ids &&
+      Array.isArray(_file_upload_ids) &&
+      _file_upload_ids.length > 0;
 
     if (hasNewFiles) {
-      console.log(`📁 New files detected - Processing ${_file_upload_ids.length} file IDs`);
-      
-      // Get files by their IDs
-      const placeholders = _file_upload_ids.map(() => '?').join(',');
+      console.log(
+        `📁 New files detected - Processing ${_file_upload_ids.length} file IDs`
+      );
+
+      const placeholders = _file_upload_ids.map(() => "?").join(",");
       const newFiles = await executeQuery(
         `SELECT file_path, file_metadata, extracted_text, created_at 
          FROM uploaded_files 
@@ -2008,27 +4132,34 @@ async function saveToDatabase(
          AND conversation_id = ?`,
         [..._file_upload_ids, conversation_id]
       );
-      
-      console.log(`📁 Found ${newFiles.length} files for IDs: ${_file_upload_ids.join(', ')}`);
+
+      console.log(
+        `📁 Found ${newFiles.length} files for IDs: ${_file_upload_ids.join(
+          ", "
+        )}`
+      );
 
       if (newFiles && newFiles.length > 0) {
-        newFiles.forEach(file => {
+        newFiles.forEach((file) => {
           if (file.file_path) {
             filePaths.push(file.file_path);
           }
-          
-          // Extract file name and metadata
+
           if (file.file_metadata) {
             try {
               const metadata = JSON.parse(file.file_metadata);
-              fileNames.push(metadata.original_filename || metadata.display_filename || 'Unknown');
+              fileNames.push(
+                metadata.original_filename ||
+                  metadata.display_filename ||
+                  "Unknown"
+              );
               fileMetadataArray.push(file.file_metadata);
             } catch (parseError) {
               console.error("❌ Error parsing file metadata:", parseError);
-              fileNames.push('Unknown');
+              fileNames.push("Unknown");
             }
           } else {
-            fileNames.push('Unknown');
+            fileNames.push("Unknown");
           }
         });
       }
@@ -2036,49 +4167,71 @@ async function saveToDatabase(
       console.log("📁 No new files - Skipping file data save");
     }
 
-    // Prepare data for database - ONLY if there are new files
+    // ✅ Handle generated files info
+    // ✅ Handle generated files info
+    let generatedFilesInfo = null;
+    if (generatedFiles && generatedFiles.length > 0) {
+      generatedFilesInfo = generatedFiles.map((file) => ({
+        filename: file.filename,
+        file_type: file.fileType,
+        download_url: file.downloadUrl,
+        size: file.size,
+        ai_generated: true,
+      }));
+    }
+
+    // Prepare data for database
     const filePathsString = filePaths.length > 0 ? filePaths.join(",") : null;
     const fileNamesString = fileNames.length > 0 ? fileNames.join(",") : null;
-    const fileMetadataString = fileMetadataArray.length > 0 ? JSON.stringify(fileMetadataArray) : null;
+    const fileMetadataString =
+      fileMetadataArray.length > 0 ? JSON.stringify(fileMetadataArray) : null;
 
-    // ✅ URL processing code (keep existing)
-    const urlsString = processedUrls.length > 0 ? processedUrls.join(",") : null;
-    const urlContentString = urlData.length > 0
-      ? urlData.map((data, index) => {
-          const status = data.error ? 'FAILED' : 'SUCCESS';
-          const siteType = data.metadata?.siteType || 'unknown';
-          const contentLength = data.content?.length || 0;
-          const content = data.content && !data.error
-            ? data.content
-            : `[ERROR: ${data.error}]`;
-          
-          return `[URL ${index + 1} - ${status} - ${siteType.toUpperCase()}]
+    // ✅ URL processing (existing logic)
+    const urlsString =
+      processedUrls.length > 0 ? processedUrls.join(",") : null;
+    const urlContentString =
+      urlData.length > 0
+        ? urlData
+            .map((data, index) => {
+              const status = data.error ? "FAILED" : "SUCCESS";
+              const siteType = data.metadata?.siteType || "unknown";
+              const contentLength = data.content?.length || 0;
+              const content =
+                data.content && !data.error
+                  ? data.content
+                  : `[ERROR: ${data.error}]`;
+
+              return `[URL ${index + 1} - ${status} - ${siteType.toUpperCase()}]
 URL: ${data.url}
-Title: ${data.title || 'No title'}
-Description: ${data.description || 'No description'}
+Title: ${data.title || "No title"}
+Description: ${data.description || "No description"}
 Content Length: ${contentLength} characters
 Site Type: ${siteType}
 
 Content:
 ${content}
 
-${'='.repeat(100)}`;
-        }).join("\n\n")
-      : null;
+${"=".repeat(100)}`;
+            })
+            .join("\n\n")
+        : null;
 
-    const urlMetadata = urlData.length > 0
-      ? JSON.stringify(urlData.map(data => ({
-          url: data.url,
-          title: data.title,
-          success: !data.error,
-          error: data.error || null,
-          site_type: data.metadata?.siteType,
-          content_length: data.content?.length || 0,
-          extraction_method: data.metadata?.extractionMethod,
-          hostname: data.metadata?.hostname,
-          processed_at: new Date().toISOString()
-        })))
-      : null;
+    const urlMetadata =
+      urlData.length > 0
+        ? JSON.stringify(
+            urlData.map((data) => ({
+              url: data.url,
+              title: data.title,
+              success: !data.error,
+              error: data.error || null,
+              site_type: data.metadata?.siteType,
+              content_length: data.content?.length || 0,
+              extraction_method: data.metadata?.extractionMethod,
+              hostname: data.metadata?.hostname,
+              processed_at: new Date().toISOString(),
+            }))
+          )
+        : null;
 
     // ✅ COMBINE EXTRACTED TEXT WITH URL CONTENT
     let allExtractedText = "";
@@ -2092,45 +4245,45 @@ ${'='.repeat(100)}`;
       allExtractedText += `URL CONTENT (${urlData.length} URLs):\n${urlContentString}`;
     }
 
-    // ✅ INSERT QUERY - file data will be null if no new upload
-     await executeQuery(
+    // ✅ INSERT QUERY WITH GENERATED FILE INFO
+    await executeQuery(
       `INSERT INTO chat_history 
-       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, file_metadata, suggestions, urls, url_content, url_metadata) 
-       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, file_metadata, suggestions, urls, url_content, url_metadata, generated_file_info) 
+       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         conversation_id,
         userMessage,
         aiResponse,
-        filePathsString, // Will be null if no new files
+        filePathsString,
         allExtractedText || null,
-        fileNamesString, // Will be null if no new files
-        fileMetadataString, // Will be null if no new files
-        suggestions && suggestions.length > 0 ? JSON.stringify(suggestions) : null,
+        fileNamesString,
+        fileMetadataString,
+        suggestions && suggestions.length > 0
+          ? JSON.stringify(suggestions)
+          : null,
         urlsString,
         urlContentString,
         urlMetadata,
+        generatedFilesInfo ? JSON.stringify(generatedFilesInfo) : null, // ✅ New field
       ]
     );
-    
-    console.log("✅ Database save successful:", {
+
+    console.log("✅ Enhanced database save successful:", {
       has_new_files: hasNewFiles,
       file_upload_ids: _file_upload_ids,
       new_files_saved: filePaths.length,
-      new_file_paths: filePaths,
-      new_file_names: fileNames,
-      has_metadata: !!fileMetadataString
+      has_generated_files: !!(generatedFiles && generatedFiles.length > 0), // ✅ FIXED
+      generated_files_count: generatedFiles ? generatedFiles.length : 0, // ✅ FIXED
+      total_urls: processedUrls.length,
+      successful_urls: urlData.filter((d) => !d.error).length,
     });
-    
+
     return true;
   } catch (error) {
-    console.error("❌ Database save error:", error);
+    console.error("❌ Enhanced database save error:", error);
     throw error;
   }
 }
-
-
-
-
 
 // 🏷️ EXECUTE RENAME WITH USER VALIDATION AND AI TITLE GENERATION - Async function
 async function executeRename(conversation_id, userMessage, user_id) {
@@ -2143,7 +4296,10 @@ async function executeRename(conversation_id, userMessage, user_id) {
       [aiGeneratedTitle, conversation_id, user_id]
     );
 
-    console.log(`🏷️ Conversation renamed to: "${aiGeneratedTitle}" for user:`, user_id);
+    console.log(
+      `🏷️ Conversation renamed to: "${aiGeneratedTitle}" for user:`,
+      user_id
+    );
     return { success: true, title: aiGeneratedTitle };
   } catch (error) {
     console.error("❌ Rename execution error:", error);
@@ -2151,8 +4307,6 @@ async function executeRename(conversation_id, userMessage, user_id) {
   }
 }
 
-
- 
 // 🤖 GENERATE AI TITLE BASED ON USER MESSAGE - Async function
 async function generateConversationTitle(userMessage) {
   try {
@@ -2165,7 +4319,8 @@ async function generateConversationTitle(userMessage) {
       messages: [
         {
           role: "system",
-          content: "Generate a short, descriptive title (3-6 words) for a conversation based on the user's first message. Reply with only the title, no quotes or extra text.",
+          content:
+            "Generate a short, descriptive title (3-6 words) for a conversation based on the user's first message. Reply with only the title, no quotes or extra text.",
         },
         {
           role: "user",
@@ -2196,16 +4351,13 @@ async function generateConversationTitle(userMessage) {
   }
 }
 
-
- 
-// 🧠 GENERATE COMPREHENSIVE SUMMARY (BACKGROUND) - Async function with URL content
 // 🧠 GENERATE COMPREHENSIVE SUMMARY WITH ALL FILE CONTEXT
 // async function generateAndSaveComprehensiveSummary(
 //   conversation_id,
 //   currentUserMessage,
 //   currentAiResponse,
 //   urlContent = "",
-//   fileContext = "" 
+//   fileContext = ""
 // ) {
 //   try {
 //     console.log("🧠 Generating comprehensive summary with full file context...");
@@ -2218,8 +4370,8 @@ async function generateConversationTitle(userMessage) {
 
 //     // ✅ GET ALL FILES EVER UPLOADED IN THIS CONVERSATION
 //     const allConversationFiles = await executeQuery(
-//       `SELECT extracted_text, file_metadata FROM uploaded_files 
-//        WHERE conversation_id = ? 
+//       `SELECT extracted_text, file_metadata FROM uploaded_files
+//        WHERE conversation_id = ?
 //        ORDER BY created_at ASC`,
 //       [conversation_id]
 //     );
@@ -2231,10 +4383,10 @@ async function generateConversationTitle(userMessage) {
 //     // ✅ ADD ALL FILE CONTEXT TO SUMMARY
 //     if (allConversationFiles && allConversationFiles.length > 0) {
 //       allConversationFiles.forEach(file => {
-//         if (file.extracted_text && 
-//             file.extracted_text !== "No readable content extracted" && 
+//         if (file.extracted_text &&
+//             file.extracted_text !== "No readable content extracted" &&
 //             file.extracted_text !== "Text extraction failed") {
-          
+
 //           let fileName = "Unknown File";
 //           if (file.file_metadata) {
 //             try {
@@ -2244,7 +4396,7 @@ async function generateConversationTitle(userMessage) {
 //               // Use default name
 //             }
 //           }
-          
+
 //           allFileContext.push(`FILE: ${fileName}\n${file.extracted_text}`);
 //         }
 //       });
@@ -2255,7 +4407,7 @@ async function generateConversationTitle(userMessage) {
 
 //     // Add URL context if available (limited)
 //     if (chat.url_content) {
-//       const limitedUrlContent = chat.url_content.length > 500 
+//       const limitedUrlContent = chat.url_content.length > 500
 //         ? chat.url_content.substring(0, 500) + "... [truncated]"
 //         : chat.url_content;
 //       userContent += `\n[URL Context: ${limitedUrlContent}]`;
@@ -2272,10 +4424,10 @@ async function generateConversationTitle(userMessage) {
 
 //   if (chat.response) {
 //     // ✅ LIMIT AI RESPONSE LENGTH
-//     const limitedResponse = chat.response.length > 800 
+//     const limitedResponse = chat.response.length > 800
 //       ? chat.response.substring(0, 800) + "... [truncated]"
 //       : chat.response;
-    
+
 //     completeConversation.push({
 //   role: "assistant",
 //   content: limitedResponse,
@@ -2287,7 +4439,7 @@ async function generateConversationTitle(userMessage) {
 //     // Add current exchange with all context
 //     let currentUserContent = currentUserMessage;
 // if (urlContent) {
-//   const limitedUrlContent = urlContent.length > 500 
+//   const limitedUrlContent = urlContent.length > 500
 //     ? urlContent.substring(0, 500) + "... [truncated]"
 //     : urlContent;
 //   currentUserContent += `\n[Current URL Context: ${limitedUrlContent}]`;
@@ -2304,14 +4456,14 @@ async function generateConversationTitle(userMessage) {
 //     });
 
 //     console.log(`📊 Creating comprehensive summary for ${completeConversation.length} messages with ALL file context`);
-    
+
 //     // Create comprehensive summary with ALL file context
 //     const conversationText = completeConversation
 //       .map((msg) => `${msg.role}: ${msg.content}`)
 //       .join("\n");
 
 //     // ✅ ADD ALL FILE CONTEXT TO SUMMARY PROMPT
-//     const allFileContextText = allFileContext.length > 0 
+//     const allFileContextText = allFileContext.length > 0
 //       ? `\n\nALL FILES IN CONVERSATION:\n${allFileContext.join('\n---\n')}`
 //       : "";
 
@@ -2373,11 +4525,11 @@ async function generateConversationTitle(userMessage) {
 //       let basicSummary = `User discussed: ${currentUserMessage.substring(0, 200)}${
 //         currentUserMessage.length > 200 ? "..." : ""
 //       }. AI provided assistance with this topic.`;
-      
+
 //       if (urlContent) {
 //         basicSummary += " URLs were referenced in the conversation.";
 //       }
-      
+
 //       if (fileContext) {
 //         basicSummary += " Multiple files were uploaded and analyzed throughout the conversation.";
 //       }
@@ -2395,13 +4547,257 @@ async function generateConversationTitle(userMessage) {
 //     }
 //   }
 // }
+
 // 🧠 FIXED: Lightweight summary with Llama (no file content)
+// async function generateAndSaveComprehensiveSummary(
+//   conversation_id,
+//   currentUserMessage,
+//   currentAiResponse,
+//   urlContent = "",
+//   fileContext = ""
+// ) {
+//   try {
+//     console.log("🧠 Generating lightweight summary with Llama...");
+
+//     // ✅ ONLY get chat history (no file content)
+//     const fullHistory = await executeQuery(
+//       "SELECT user_message, response FROM chat_history WHERE conversation_id = ? ORDER BY created_at ASC",
+//       [conversation_id]
+//     );
+
+//     // ✅ ONLY get file NAMES (not content)
+//     const allConversationFiles = await executeQuery(
+//       `SELECT file_metadata FROM uploaded_files 
+//        WHERE conversation_id = ? 
+//        AND (status = 'confirmed' OR status = 'pending_response' OR status IS NULL)
+//        ORDER BY created_at ASC`,
+//       [conversation_id]
+//     );
+//     // ✅ GET ALL URLS FROM THIS CONVERSATION
+//     const allConversationUrls = await executeQuery(
+//       `SELECT urls, url_metadata FROM chat_history 
+//    WHERE conversation_id = ? AND urls IS NOT NULL
+//    ORDER BY created_at ASC`,
+//       [conversation_id]
+//     );
+
+//     // ✅ Create URL summary for the comprehensive summary
+//     let urlSummary = "";
+//     const importantUrls = new Set();
+
+//     if (allConversationUrls && allConversationUrls.length > 0) {
+//       allConversationUrls.forEach((chat) => {
+//         if (chat.urls) {
+//           const urls = chat.urls.split(",");
+//           urls.forEach((url) => importantUrls.add(url.trim()));
+//         }
+
+//         // Extract successful URLs from metadata
+//         if (chat.url_metadata) {
+//           try {
+//             const metadata = JSON.parse(chat.url_metadata);
+//             metadata.forEach((urlMeta) => {
+//               if (urlMeta.success && urlMeta.site_type) {
+//                 importantUrls.add(`${urlMeta.url} [${urlMeta.site_type}]`);
+//               }
+//             });
+//           } catch (e) {
+//             // Ignore parsing errors
+//           }
+//         }
+//       });
+
+//       if (importantUrls.size > 0) {
+//         urlSummary = `\n\nIMPORTANT URLs REFERENCED:\n${Array.from(
+//           importantUrls
+//         )
+//           .slice(0, 10)
+//           .join("\n")}`;
+//       }
+//     }
+//     // ✅ Build conversation WITHOUT file content
+//     const completeConversation = [];
+
+//     fullHistory.forEach((chat) => {
+//       if (chat.user_message) {
+//         // ✅ LIMIT user message length for summary
+//         const limitedUserMessage =
+//           chat.user_message.length > 300
+//             ? chat.user_message.substring(0, 300) + "..."
+//             : chat.user_message;
+
+//         completeConversation.push({
+//           role: "user",
+//           content: limitedUserMessage,
+//         });
+//       }
+
+//       if (chat.response) {
+//         // ✅ LIMIT AI response length for summary
+//         const limitedResponse =
+//           chat.response.length > 400
+//             ? chat.response.substring(0, 400) + "..."
+//             : chat.response;
+
+//         completeConversation.push({
+//           role: "assistant",
+//           content: limitedResponse,
+//         });
+//       }
+//     });
+
+//     // Add current exchange (also limited)
+//     const currentUserLimited =
+//       currentUserMessage.length > 300
+//         ? currentUserMessage.substring(0, 300) + "..."
+//         : currentUserMessage;
+
+//     const currentAiLimited =
+//       currentAiResponse.length > 400
+//         ? currentAiResponse.substring(0, 400) + "..."
+//         : currentAiResponse;
+
+//     completeConversation.push({ role: "user", content: currentUserLimited });
+//     completeConversation.push({ role: "assistant", content: currentAiLimited });
+
+//     // ✅ Create file names summary (NOT content)
+//     let filesSummary = "";
+//     if (allConversationFiles && allConversationFiles.length > 0) {
+//       const fileNames = [];
+//       allConversationFiles.forEach((file) => {
+//         if (file.file_metadata) {
+//           try {
+//             const metadata = JSON.parse(file.file_metadata);
+//             fileNames.push(
+//               metadata.original_filename || metadata.display_filename
+//             );
+//           } catch (e) {}
+//         }
+//       });
+
+//       if (fileNames.length > 0) {
+//         filesSummary = `\n\nFiles mentioned in conversation: ${fileNames.join(
+//           ", "
+//         )}`;
+//       }
+//     }
+
+//     // ✅ Build conversation text (limited length)
+//     const conversationText = completeConversation
+//       .map((msg) => `${msg.role}: ${msg.content}`)
+//       .join("\n");
+
+//     // ✅ SAFE: Limit total conversation text to prevent token overflow
+//     const maxConversationLength = 8000; // Safe limit
+//     const finalConversationText =
+//       conversationText.length > maxConversationLength
+//         ? conversationText.substring(0, maxConversationLength) +
+//           "\n...[Earlier messages truncated for summary]"
+//         : conversationText;
+
+//     console.log(
+//       `📊 Creating summary: ${completeConversation.length} messages, ${finalConversationText.length} chars`
+//     );
+
+//     // ✅ LIGHTWEIGHT summary prompt (NO file content)
+//     const summaryPrompt = [
+//       {
+//         role: "system",
+//         content: `Create a concise conversation summary focusing on:
+
+// 1. Main topics and questions discussed
+// 2. User's key needs and preferences  
+// 3. Important decisions or recommendations made
+// 4. Technical details or specific requests mentioned
+// 5. Files mentioned by name (not content)
+
+// Keep it under 400 words for efficient context loading. Focus on conversation flow, not file content.
+
+// Also include any important URLs or websites that were referenced and discussed in the conversation.`,
+//       },
+//       {
+//         role: "user",
+//         content: `Conversation to summarize:\n${finalConversationText}${filesSummary}${urlSummary}`,
+//       },
+//     ];
+
+//     // ✅ USE LLAMA for summary generation
+//     const summaryResult = await llama.chat.completions.create({
+//       messages: summaryPrompt,
+//       temperature: 0.2,
+//       max_tokens: 600, // Reduced for efficiency
+//     });
+
+//     const summary = summaryResult.choices?.[0]?.message?.content || "";
+
+//     if (summary && summary.length > 10) {
+//       await executeQuery(
+//         "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+//         [summary, conversation_id]
+//       );
+
+//       console.log("✅ Lightweight summary generated with Llama:", {
+//         length: summary.length,
+//         message_count: completeConversation.length,
+//         files_mentioned: allConversationFiles.length,
+//         urls_mentioned: importantUrls.size,
+//         conversation_id: conversation_id,
+//         model: "Llama",
+//         summary_preview: summary.substring(0, 100) + "...",
+//       });
+
+//       return true;
+//     }
+
+//     console.log("⚠️ Summary generation failed - empty or too short");
+//     return false;
+//   } catch (error) {
+//     console.error("❌ Summary generation failed:", error.message);
+
+//     // ✅ SIMPLE fallback summary
+//     try {
+//       let basicSummary = `User discussed: ${currentUserMessage.substring(
+//         0,
+//         150
+//       )}${
+//         currentUserMessage.length > 150 ? "..." : ""
+//       }. AI provided assistance with this topic.`;
+
+//       if (urlContent) {
+//         basicSummary += " URLs were referenced.";
+//       }
+
+//       // ✅ Only mention file count, not content
+//       const fileCount = allConversationFiles?.length || 0;
+//       if (fileCount > 0) {
+//         basicSummary += ` ${fileCount} files were discussed.`;
+//       }
+//       // ✅ Mention URL count
+//       const urlCount = importantUrls?.size || 0;
+//       if (urlCount > 0) {
+//         basicSummary += ` ${urlCount} URLs were referenced.`;
+//       }
+
+//       await executeQuery(
+//         "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+//         [basicSummary, conversation_id]
+//       );
+
+//       console.log("✅ Fallback summary saved with Llama");
+//       return true;
+//     } catch (fallbackError) {
+//       console.error("❌ Even fallback summary failed:", fallbackError);
+//       return false;
+//     }
+//   }
+// }
+
 async function generateAndSaveComprehensiveSummary(
   conversation_id,
   currentUserMessage,
   currentAiResponse,
   urlContent = "",
-  fileContext = "" 
+  fileContext = ""
 ) {
   try {
     console.log("🧠 Generating lightweight summary with Llama...");
@@ -2420,94 +4816,119 @@ async function generateAndSaveComprehensiveSummary(
        ORDER BY created_at ASC`,
       [conversation_id]
     );
-// ✅ GET ALL URLS FROM THIS CONVERSATION
-const allConversationUrls = await executeQuery(
-  `SELECT urls, url_metadata FROM chat_history 
+    // ✅ GET ALL URLS FROM THIS CONVERSATION
+    const allConversationUrls = await executeQuery(
+      `SELECT urls, url_metadata FROM chat_history 
    WHERE conversation_id = ? AND urls IS NOT NULL
    ORDER BY created_at ASC`,
-  [conversation_id]
-);
+      [conversation_id]
+    );
 
-// ✅ Create URL summary for the comprehensive summary
-let urlSummary = "";
-const importantUrls = new Set();
+    // ✅ Create URL summary for the comprehensive summary
+    let urlSummary = "";
+    const importantUrls = new Set();
 
-if (allConversationUrls && allConversationUrls.length > 0) {
-  allConversationUrls.forEach(chat => {
-    if (chat.urls) {
-      const urls = chat.urls.split(',');
-      urls.forEach(url => importantUrls.add(url.trim()));
-    }
-    
-    // Extract successful URLs from metadata
-    if (chat.url_metadata) {
-      try {
-        const metadata = JSON.parse(chat.url_metadata);
-        metadata.forEach(urlMeta => {
-          if (urlMeta.success && urlMeta.site_type) {
-            importantUrls.add(`${urlMeta.url} [${urlMeta.site_type}]`);
+    if (allConversationUrls && allConversationUrls.length > 0) {
+      allConversationUrls.forEach((chat) => {
+        if (chat.urls) {
+          const urls = chat.urls.split(",");
+          urls.forEach((url) => importantUrls.add(url.trim()));
+        }
+
+        // Extract successful URLs from metadata
+        if (chat.url_metadata) {
+          try {
+            const metadata = JSON.parse(chat.url_metadata);
+            metadata.forEach((urlMeta) => {
+              if (urlMeta.success && urlMeta.site_type) {
+                importantUrls.add(`${urlMeta.url} [${urlMeta.site_type}]`);
+              }
+            });
+          } catch (e) {
+            // Ignore parsing errors
           }
-        });
-      } catch (e) {
-        // Ignore parsing errors
+        }
+      });
+
+      if (importantUrls.size > 0) {
+        urlSummary = `\n\nIMPORTANT URLs REFERENCED:\n${Array.from(
+          importantUrls
+        )
+          .slice(0, 10)
+          .join("\n")}`;
       }
     }
-  });
-  
-  if (importantUrls.size > 0) {
-    urlSummary = `\n\nIMPORTANT URLs REFERENCED:\n${Array.from(importantUrls).slice(0, 10).join('\n')}`;
-  }
-}
+    
     // ✅ Build conversation WITHOUT file content
     const completeConversation = [];
-    
+
     fullHistory.forEach((chat) => {
       if (chat.user_message) {
         // ✅ LIMIT user message length for summary
-        const limitedUserMessage = chat.user_message.length > 300 
-          ? chat.user_message.substring(0, 300) + "..."
-          : chat.user_message;
-        
-        completeConversation.push({ role: "user", content: limitedUserMessage });
+        const limitedUserMessage =
+          chat.user_message.length > 300
+            ? chat.user_message.substring(0, 300) + "..."
+            : chat.user_message;
+
+        completeConversation.push({
+          role: "user",
+          content: limitedUserMessage,
+        });
       }
 
       if (chat.response) {
         // ✅ LIMIT AI response length for summary
-        const limitedResponse = chat.response.length > 400 
-          ? chat.response.substring(0, 400) + "..."
-          : chat.response;
-        
-        completeConversation.push({ role: "assistant", content: limitedResponse });
+        const limitedResponse =
+          chat.response.length > 400
+            ? chat.response.substring(0, 400) + "..."
+            : chat.response;
+
+        completeConversation.push({
+          role: "assistant",
+          content: limitedResponse,
+        });
       }
     });
 
     // Add current exchange (also limited)
-    const currentUserLimited = currentUserMessage.length > 300 
-      ? currentUserMessage.substring(0, 300) + "..."
-      : currentUserMessage;
-    
-    const currentAiLimited = currentAiResponse.length > 400 
-      ? currentAiResponse.substring(0, 400) + "..."
-      : currentAiResponse;
+    const currentUserLimited =
+      currentUserMessage.length > 300
+        ? currentUserMessage.substring(0, 300) + "..."
+        : currentUserMessage;
+
+    const currentAiLimited =
+      currentAiResponse.length > 400
+        ? currentAiResponse.substring(0, 400) + "..."
+        : currentAiResponse;
 
     completeConversation.push({ role: "user", content: currentUserLimited });
     completeConversation.push({ role: "assistant", content: currentAiLimited });
+
+    // ✅ NEW: Extract last 4 messages for better accuracy
+    const recentMessages = completeConversation.slice(-4);
+    const recentMessagesText = recentMessages
+      .map((msg) => `${msg.role}: ${msg.content}`)
+      .join("\n");
 
     // ✅ Create file names summary (NOT content)
     let filesSummary = "";
     if (allConversationFiles && allConversationFiles.length > 0) {
       const fileNames = [];
-      allConversationFiles.forEach(file => {
+      allConversationFiles.forEach((file) => {
         if (file.file_metadata) {
           try {
             const metadata = JSON.parse(file.file_metadata);
-            fileNames.push(metadata.original_filename || metadata.display_filename);
+            fileNames.push(
+              metadata.original_filename || metadata.display_filename
+            );
           } catch (e) {}
         }
       });
-      
+
       if (fileNames.length > 0) {
-        filesSummary = `\n\nFiles mentioned in conversation: ${fileNames.join(", ")}`;
+        filesSummary = `\n\nFiles mentioned in conversation: ${fileNames.join(
+          ", "
+        )}`;
       }
     }
 
@@ -2518,13 +4939,17 @@ if (allConversationUrls && allConversationUrls.length > 0) {
 
     // ✅ SAFE: Limit total conversation text to prevent token overflow
     const maxConversationLength = 8000; // Safe limit
-    const finalConversationText = conversationText.length > maxConversationLength
-      ? conversationText.substring(0, maxConversationLength) + "\n...[Earlier messages truncated for summary]"
-      : conversationText;
+    const finalConversationText =
+      conversationText.length > maxConversationLength
+        ? conversationText.substring(0, maxConversationLength) +
+          "\n...[Earlier messages truncated for summary]"
+        : conversationText;
 
-    console.log(`📊 Creating summary: ${completeConversation.length} messages, ${finalConversationText.length} chars`);
-    
-    // ✅ LIGHTWEIGHT summary prompt (NO file content)
+    console.log(
+      `📊 Creating summary: ${completeConversation.length} messages, ${finalConversationText.length} chars, last 4 messages: ${recentMessages.length}`
+    );
+
+    // ✅ ENHANCED summary prompt with recent messages for better accuracy
     const summaryPrompt = [
       {
         role: "system",
@@ -2538,12 +4963,16 @@ if (allConversationUrls && allConversationUrls.length > 0) {
 
 Keep it under 400 words for efficient context loading. Focus on conversation flow, not file content.
 
-Also include any important URLs or websites that were referenced and discussed in the conversation.`,
+Also include any important URLs or websites that were referenced and discussed in the conversation.
 
+Pay special attention to the recent messages for the most current context and user intent.`,
       },
       {
         role: "user",
-        content: `Conversation to summarize:\n${finalConversationText}${filesSummary}${urlSummary}`,
+        content: `Full conversation to summarize:\n${finalConversationText}${filesSummary}${urlSummary}
+
+RECENT MESSAGES (for better accuracy):
+${recentMessagesText}`,
       },
     ];
 
@@ -2562,16 +4991,16 @@ Also include any important URLs or websites that were referenced and discussed i
         [summary, conversation_id]
       );
 
-     console.log("✅ Lightweight summary generated with Llama:", {
-  length: summary.length,
-  message_count: completeConversation.length,
-  files_mentioned: allConversationFiles.length,
-  urls_mentioned: importantUrls.size,
-  conversation_id: conversation_id,
-  model: "Llama",
-  summary_preview: summary.substring(0, 100) + "...",
-});
-
+      console.log("✅ Lightweight summary generated with Llama:", {
+        length: summary.length,
+        message_count: completeConversation.length,
+        recent_messages_count: recentMessages.length,
+        files_mentioned: allConversationFiles.length,
+        urls_mentioned: importantUrls.size,
+        conversation_id: conversation_id,
+        model: "Llama",
+        summary_preview: summary.substring(0, 100) + "...",
+      });
 
       return true;
     }
@@ -2583,24 +5012,27 @@ Also include any important URLs or websites that were referenced and discussed i
 
     // ✅ SIMPLE fallback summary
     try {
-      let basicSummary = `User discussed: ${currentUserMessage.substring(0, 150)}${
+      let basicSummary = `User discussed: ${currentUserMessage.substring(
+        0,
+        150
+      )}${
         currentUserMessage.length > 150 ? "..." : ""
       }. AI provided assistance with this topic.`;
-      
+
       if (urlContent) {
         basicSummary += " URLs were referenced.";
       }
-      
+
       // ✅ Only mention file count, not content
       const fileCount = allConversationFiles?.length || 0;
       if (fileCount > 0) {
         basicSummary += ` ${fileCount} files were discussed.`;
       }
-// ✅ Mention URL count
-const urlCount = importantUrls?.size || 0;
-if (urlCount > 0) {
-  basicSummary += ` ${urlCount} URLs were referenced.`;
-}
+      // ✅ Mention URL count
+      const urlCount = importantUrls?.size || 0;
+      if (urlCount > 0) {
+        basicSummary += ` ${urlCount} URLs were referenced.`;
+      }
 
       await executeQuery(
         "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -2615,6 +5047,7 @@ if (urlCount > 0) {
     }
   }
 }
+
 
 exports.guestChat = async (req, res) => {
   const { userMessage } = req.body;
@@ -2663,14 +5096,16 @@ Be helpful, accurate, and concise. This is guest mode, so provide complete respo
 
     try {
       // Send initial metadata immediately
-      res.write(JSON.stringify({
-        type: "start",
-        guest_mode: true,
-        context: {
-          url_processing_started: true,
-        },
-        processing_time: Date.now() - startTime,
-      }) + "\n");
+      res.write(
+        JSON.stringify({
+          type: "start",
+          guest_mode: true,
+          context: {
+            url_processing_started: true,
+          },
+          processing_time: Date.now() - startTime,
+        }) + "\n"
+      );
 
       // 🚀 START AI RESPONSE STREAM IMMEDIATELY (Don't wait for URLs)
       let finalMessages = [...messages];
@@ -2691,10 +5126,12 @@ Be helpful, accurate, and concise. This is guest mode, so provide complete respo
         const content = chunk.choices[0]?.delta?.content || "";
         if (content) {
           aiResponse += content;
-          res.write(JSON.stringify({
-            type: "content",
-            content: content,
-          }) + "\n");
+          res.write(
+            JSON.stringify({
+              type: "content",
+              content: content,
+            }) + "\n"
+          );
         }
       }
 
@@ -2704,43 +5141,54 @@ Be helpful, accurate, and concise. This is guest mode, so provide complete respo
 
       // 🚀 GENERATE SIMPLE CONTEXTUAL SUGGESTIONS AFTER AI RESPONSE
       console.log("🎯 Generating guest suggestions based on conversation...");
-      const suggestions = await generateFastGuestSuggestions(userMessage, aiResponse);
+      const suggestions = await generateFastGuestSuggestions(
+        userMessage,
+        aiResponse
+      );
 
       // Send final data
-      res.write(JSON.stringify({
-        type: "end",
-        suggestions: suggestions,
-        full_response: aiResponse,
-        guest_mode: true,
-       processed_urls: urlData.map((data) => ({
-  url: data.url,
-  title: data.title,
-  success: !data.error,
-  error: data.error,
-  site_type: data.metadata?.siteType,  // Optional enhancement
-  content_length: data.content?.length || 0  // Optional enhancement
-})) ,
-        context: {
-          url_content_available: !!urlContent,
-          urls_processed: urlData.length,
-        },
-        total_processing_time: Date.now() - startTime,
-      }) + "\n");
+      res.write(
+        JSON.stringify({
+          type: "end",
+          suggestions: suggestions,
+          full_response: aiResponse,
+          guest_mode: true,
+          processed_urls: urlData.map((data) => ({
+            url: data.url,
+            title: data.title,
+            success: !data.error,
+            error: data.error,
+            site_type: data.metadata?.siteType, // Optional enhancement
+            content_length: data.content?.length || 0, // Optional enhancement
+          })),
+          context: {
+            url_content_available: !!urlContent,
+            urls_processed: urlData.length,
+          },
+          total_processing_time: Date.now() - startTime,
+        }) + "\n"
+      );
 
       res.end();
 
       // 📊 Optional: Log guest interactions with URLs for analytics (without storing personal data)
       if (urlData.length > 0) {
-        console.log(`📊 Guest interaction: ${urlData.length} URLs processed, ${urlData.filter((d) => !d.error).length} successful`);
+        console.log(
+          `📊 Guest interaction: ${urlData.length} URLs processed, ${
+            urlData.filter((d) => !d.error).length
+          } successful`
+        );
       }
-
     } catch (aiError) {
       console.error("AI API error in guest mode:", aiError);
-      res.write(JSON.stringify({
-        type: "error",
-        error: "I'm having trouble processing your request. Please try again.",
-        guest_mode: true,
-      }) + "\n");
+      res.write(
+        JSON.stringify({
+          type: "error",
+          error:
+            "I'm having trouble processing your request. Please try again.",
+          guest_mode: true,
+        }) + "\n"
+      );
       res.end();
     }
   } catch (error) {
@@ -2762,21 +5210,25 @@ async function processUrlsOptimizedGuest(userMessage, res) {
   }
 
   const extractedUrls = extractUrls(userMessage);
-  
+
   if (extractedUrls.length === 0) {
     return { urlData, urlContent, processedUrls };
   }
 
-  console.log(`🔗 Guest mode: Found ${extractedUrls.length} URLs - processing optimized`);
+  console.log(
+    `🔗 Guest mode: Found ${extractedUrls.length} URLs - processing optimized`
+  );
 
   // Send URL processing status immediately
-  res.write(JSON.stringify({
-    type: "url_processing",
-    status: "started",
-    urls: extractedUrls,
-    count: extractedUrls.length,
-    guest_mode: true,
-  }) + "\n");
+  res.write(
+    JSON.stringify({
+      type: "url_processing",
+      status: "started",
+      urls: extractedUrls,
+      count: extractedUrls.length,
+      guest_mode: true,
+    }) + "\n"
+  );
 
   try {
     // ⚡ Process URLs with timeout and parallel processing
@@ -2784,11 +5236,11 @@ async function processUrlsOptimizedGuest(userMessage, res) {
       try {
         // Set a 3-second timeout for each URL
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('URL processing timeout')), 3000)
+          setTimeout(() => reject(new Error("URL processing timeout")), 3000)
         );
-        
+
         const urlProcessPromise = processUrls([url]);
-        
+
         const result = await Promise.race([urlProcessPromise, timeoutPromise]);
         return result[0]; // processUrls returns array
       } catch (error) {
@@ -2806,42 +5258,50 @@ async function processUrlsOptimizedGuest(userMessage, res) {
     const allUrlsPromise = Promise.all(urlPromises);
     const totalTimeoutPromise = new Promise((resolve) =>
       setTimeout(() => {
-        console.log("⚠️ Guest URL processing timeout - proceeding with partial results");
+        console.log(
+          "⚠️ Guest URL processing timeout - proceeding with partial results"
+        );
         resolve([]);
       }, 4000)
     );
 
     urlData = await Promise.race([allUrlsPromise, totalTimeoutPromise]);
-    
+
     if (urlData && urlData.length > 0) {
       processedUrls = extractedUrls;
-      
+
       // Create URL content summary
       urlContent = urlData
         .filter((data) => data && data.content && !data.error)
-        .map((data) => 
-          `URL: ${data.url}\nTitle: ${data.title}\nContent: ${data.content.substring(0, 1500)}\n---`
+        .map(
+          (data) =>
+            `URL: ${data.url}\nTitle: ${
+              data.title
+            }\nContent: ${data.content.substring(0, 1500)}\n---`
         )
         .join("\n");
 
       // Send completion status
-      res.write(JSON.stringify({
-        type: "url_processing",
-        status: "completed",
-        processed: urlData.length,
-        successful: urlData.filter((d) => d && !d.error).length,
-        guest_mode: true,
-      }) + "\n");
+      res.write(
+        JSON.stringify({
+          type: "url_processing",
+          status: "completed",
+          processed: urlData.length,
+          successful: urlData.filter((d) => d && !d.error).length,
+          guest_mode: true,
+        }) + "\n"
+      );
     }
-
   } catch (error) {
     console.error("❌ Guest URL processing error:", error);
-    res.write(JSON.stringify({
-      type: "url_processing",
-      status: "error",
-      error: "Failed to process URLs",
-      guest_mode: true,
-    }) + "\n");
+    res.write(
+      JSON.stringify({
+        type: "url_processing",
+        status: "error",
+        error: "Failed to process URLs",
+        guest_mode: true,
+      }) + "\n"
+    );
   }
 
   return { urlData, urlContent, processedUrls };
@@ -2852,12 +5312,13 @@ async function generateFastGuestSuggestions(userMessage, aiResponse = null) {
   try {
     // Build context from both user message and AI response
     let context = userMessage || "Continue the conversation";
-    
+
     if (aiResponse && aiResponse.trim().length > 20) {
       // Add AI response context (first 500 chars for efficiency)
-      const responsePreview = aiResponse.length > 500 
-        ? aiResponse.substring(0, 500) + "..." 
-        : aiResponse;
+      const responsePreview =
+        aiResponse.length > 500
+          ? aiResponse.substring(0, 500) + "..."
+          : aiResponse;
       context = `User asked: "${userMessage}"\nAI responded: "${responsePreview}"`;
     }
 
@@ -2866,7 +5327,8 @@ async function generateFastGuestSuggestions(userMessage, aiResponse = null) {
       messages: [
         {
           role: "system",
-          content: "Based on the conversation, generate 3 short follow-up questions that the user would naturally ask next. Make them specific to the topics discussed. Reply only with numbered list.",
+          content:
+            "Based on the conversation, generate 3 short follow-up questions that the user would naturally ask next. Make them specific to the topics discussed. Reply only with numbered list.",
         },
         { role: "user", content: context },
       ],
@@ -2877,7 +5339,12 @@ async function generateFastGuestSuggestions(userMessage, aiResponse = null) {
     const rawSuggestion = suggestionResult.choices?.[0]?.message?.content || "";
     const suggestions = rawSuggestion
       .split("\n")
-      .map((s) => s.replace(/^[\s\d\-•.]+/, "").replace(/[.?!]+$/, "").trim())
+      .map((s) =>
+        s
+          .replace(/^[\s\d\-•.]+/, "")
+          .replace(/[.?!]+$/, "")
+          .trim()
+      )
       .filter(Boolean)
       .slice(0, 3); // Only 3 suggestions for guest mode
 
@@ -2887,7 +5354,6 @@ async function generateFastGuestSuggestions(userMessage, aiResponse = null) {
     return [];
   }
 }
-
 
 //  delete function
 exports.softDeleteConversation = async (req, res) => {
@@ -3068,3 +5534,175 @@ exports.softDeleteConversation = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
+
+// ✅ SMART CONTENT VALIDATOR
+function validateFileContent(content, fileType) {
+  if (!content || content.length < 50) {
+    return { valid: false, reason: "Content too short" };
+  }
+
+  // Type-specific validation
+  switch (fileType.toLowerCase()) {
+    case "docx":
+      if (!content.includes("\n") && content.length < 100) {
+        return { valid: false, reason: "Document content seems incomplete" };
+      }
+      break;
+    case "xlsx":
+      if (
+        !content.includes("|") &&
+        !content.includes("\t") &&
+        !content.includes(",")
+      ) {
+        return {
+          valid: false,
+          reason: "Spreadsheet should contain tabular data",
+        };
+      }
+      break;
+    case "pdf":
+      if (content.length < 200) {
+        return { valid: false, reason: "PDF content too minimal" };
+      }
+      break;
+  }
+
+  return { valid: true };
+}
+
+// ✅ PROFESSIONAL FILENAME GENERATOR
+function generateProfessionalFilename(originalName, fileType, userInfo = null) {
+  let cleanName = originalName
+    .replace(/[^a-zA-Z0-9_\-\s]/g, "")
+    .replace(/\s+/g, "_")
+    .substring(0, 50);
+
+  // Add user context if available
+  if (userInfo && userInfo.username) {
+    const userName = userInfo.username.replace(/[^a-zA-Z0-9]/g, "");
+    if (!cleanName.toLowerCase().includes(userName.toLowerCase())) {
+      cleanName = `${cleanName}_${userName}`;
+    }
+  }
+
+  // Add timestamp for uniqueness
+  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
+  return `${cleanName}_${timestamp}`;
+}
+
+// ✅ RESPONSE QUALITY ANALYZER
+function analyzeResponseQuality(userMessage, aiResponse, fileAnalysis) {
+  const analysis = {
+    score: 0,
+    issues: [],
+    suggestions: [],
+  };
+
+  // Check if file creation was requested but not delivered
+  if (fileAnalysis.shouldCreateFile && !aiResponse.includes("[CREATE_FILE:")) {
+    analysis.issues.push("File creation requested but not provided");
+    analysis.score -= 30;
+  }
+
+  // Check response length appropriateness
+  if (userMessage.length > 100 && aiResponse.length < 200) {
+    analysis.issues.push("Response may be too brief for detailed request");
+    analysis.score -= 10;
+  }
+
+  // Check for professional formatting
+  if (fileAnalysis.shouldCreateFile && aiResponse.includes("[CREATE_FILE:")) {
+    if (!aiResponse.includes("**") && !aiResponse.includes("*")) {
+      analysis.suggestions.push(
+        "Consider adding more formatting to file content"
+      );
+      analysis.score -= 5;
+    }
+  }
+
+  // Base score
+  analysis.score += 70;
+
+  return analysis;
+}
+
+// ✅ PERFORMANCE MONITOR
+class PerformanceMonitor {
+  constructor() {
+    this.metrics = new Map();
+  }
+
+  start(operation) {
+    this.metrics.set(operation, {
+      startTime: Date.now(),
+      endTime: null,
+      duration: null,
+    });
+  }
+
+  end(operation) {
+    const metric = this.metrics.get(operation);
+    if (metric) {
+      metric.endTime = Date.now();
+      metric.duration = metric.endTime - metric.startTime;
+
+      // Log slow operations
+      if (metric.duration > 3000) {
+        console.warn(`🐌 SLOW: ${operation} took ${metric.duration}ms`);
+      } else if (metric.duration < 500) {
+        console.log(`⚡ FAST: ${operation} took ${metric.duration}ms`);
+      }
+    }
+  }
+
+  getMetrics() {
+    const results = {};
+    for (const [operation, metric] of this.metrics.entries()) {
+      results[operation] = metric.duration;
+    }
+    return results;
+  }
+
+  reset() {
+    this.metrics.clear();
+  }
+}
+
+// ✅ GLOBAL PERFORMANCE MONITOR INSTANCE
+const performanceMonitor = new PerformanceMonitor();
+
+// ✅ ENHANCED ERROR RECOVERY
+async function handleCriticalError(error, context, res) {
+  console.error(`🚨 CRITICAL ERROR in ${context}:`, error);
+
+  // Try to provide helpful error message based on error type
+  let userMessage =
+    "I'm experiencing technical difficulties. Please try again.";
+
+  if (error.message.includes("timeout")) {
+    userMessage =
+      "The request is taking longer than expected. Please try again with a shorter message.";
+  } else if (error.message.includes("token")) {
+    userMessage =
+      "Your request is quite complex. Please try breaking it into smaller parts.";
+  } else if (error.message.includes("file")) {
+    userMessage =
+      "There was an issue with file processing. Please try uploading your files again.";
+  }
+
+  if (!res.headersSent) {
+    res.write(
+      JSON.stringify({
+        type: "error",
+        error: userMessage,
+        context: context,
+        timestamp: new Date().toISOString(),
+        recoverable: true,
+      }) + "\n"
+    );
+  }
+}
+
+// ✅ EXPORT PERFORMANCE MONITOR FOR TESTING
+module.exports.performanceMonitor = performanceMonitor;

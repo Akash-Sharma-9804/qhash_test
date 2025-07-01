@@ -310,6 +310,8 @@ const uploadToFTP = async (buffer, originalFilename) => {
     }
 
     await client.uploadFrom(stream, uniqueFilename); // ✅ Use unique filename
+   
+    // ✅ RETURN STRING PATH FOR BACKWARD COMPATIBILITY
     return `/fileuploads/files/${uniqueFilename}`;
     
   }, uniqueFilename, buffer.length);
