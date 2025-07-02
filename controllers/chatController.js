@@ -736,20 +736,20 @@ function formatLikeChatGPT(content) {
 
   let formatted = content;
 
-  // ✅ SKIP FORMATTING IF CONTENT CONTAINS ESCAPED HTML
-  const hasEscapedHtml = /&lt;|&gt;|&amp;/.test(content);
+  // ✅ SKIP FORMATTING IF CONTENT HAS ESCAPED HTML OR CODE BLOCKS
+  const hasCodeBlock = content.includes('```');
+  const hasEscapedHtml = /&lt;|&gt;|&amp;|&quot;|&#39;/.test(content);
   
-  if (hasEscapedHtml) {
-    // ✅ For escaped HTML content, just return as-is
+  if (hasCodeBlock || hasEscapedHtml) {
+    // ✅ Return as-is for code blocks or escaped HTML
     return formatted;
   }
 
-  // ✅ APPLY FORMATTING ONLY FOR NON-HTML CONTENT
+  // ✅ APPLY FORMATTING ONLY FOR REGULAR TEXT CONTENT
   formatted = formatted
-    // ✅ ENHANCED FORMATTING FOR BETTER READABILITY
     .replace(/\*\*(.*?)\*\*/g, "**$1**") // Keep bold
     .replace(/\*(.*?)\*/g, "*$1*") // Keep italic
-    .replace(/`(.*?)`/g, "`$1`") // Keep code
+    .replace(/`(.*?)`/g, "`$1`") // Keep inline code
 
     // ✅ SMART KEYWORD HIGHLIGHTING
     .replace(/\b(IMPORTANT|CRITICAL|NOTE|WARNING|ALERT)\b:/gi, "⚠️ **$1:**")
@@ -757,17 +757,31 @@ function formatLikeChatGPT(content) {
     .replace(/\b(EXAMPLE|SAMPLE|TEMPLATE)\b:/gi, "📝 **$1:**")
     .replace(/\b(SUMMARY|CONCLUSION|RESULT)\b:/gi, "📊 **$1:**")
 
+    // ✅ TABLE FORMATTING - ADD THIS
+    .replace(/^(.+\|.+)$/gm, (match) => {
+      // Convert pipe-separated lines to markdown table format
+      if (match.includes('|')) {
+        return match; // Keep as-is, ReactMarkdown will handle it
+      }
+      return match;
+    })
+
     // ✅ LIST FORMATTING
     .replace(/^(\d+)\.\s/gm, "**$1.** ")
     .replace(/^[-•*]\s/gm, "• ")
 
-    // ✅ HEADER FORMATTING (for complete lines only)
+    // ✅ HEADER FORMATTING
     .replace(/^#{1}\s(.*?)$/gm, "\n## **$1**\n")
     .replace(/^#{2}\s(.*?)$/gm, "\n### **$1**\n")
     .replace(/^#{3}\s(.*?)$/gm, "\n#### **$1**\n");
 
   return formatted;
 }
+
+
+
+
+
 
 
 
@@ -787,720 +801,7 @@ function escapeHtmlContent(content) {
 
 
  
-
-// exports.askChatbot = async (req, res) => {
-//  console.log("✅ Received request at /chat:", req.body);
-
-//   let { userMessage, conversation_id, extracted_summary, _file_upload_ids } =
-//     req.body;
-//   const user_id = req.user?.user_id;
-
-//   // ✅ STRICT USER VALIDATION
-//   if (!user_id || isNaN(user_id)) {
-//     console.error("❌ Invalid user_id in askChatbot:", user_id);
-//     return res.status(401).json({ error: "Unauthorized: Invalid user ID" });
-//   }
-
-//   if (!userMessage || userMessage.trim().length === 0) {
-//     return res.status(400).json({
-//       error: "User message cannot be empty",
-//     });
-//   }
-
-//   console.log(
-//     `🔍 Processing chat for user_id: ${user_id}, conversation: ${conversation_id}`
-//   );
-
-//   try {
-//     // Set headers for streaming
-//     res.writeHead(200, {
-//       "Content-Type": "text/plain; charset=utf-8",
-//       "Transfer-Encoding": "chunked",
-//       "Cache-Control": "no-cache",
-//       Connection: "keep-alive",
-//       "Access-Control-Allow-Origin": "*",
-//       "Access-Control-Allow-Headers": "Cache-Control",
-//     });
-
-//     // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED
-//     if (conversation_id && !isNaN(conversation_id)) {
-//       try {
-//         const ownershipCheck = await executeQuery(
-//           "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
-//           [conversation_id, user_id]
-//         );
-
-//         if (!ownershipCheck || ownershipCheck.length === 0) {
-//           console.error("❌ Unauthorized conversation access");
-//           await rollbackPendingFiles(_file_upload_ids);
-//           res.write(
-//             JSON.stringify({
-//               type: "error",
-//               error: "Unauthorized: Conversation does not belong to user",
-//             }) + "\n"
-//           );
-//           res.end();
-//           return;
-//         }
-//         console.log("✅ Conversation ownership verified");
-//       } catch (ownershipError) {
-//         console.error("❌ Ownership check failed:", ownershipError);
-//         res.write(
-//           JSON.stringify({
-//             type: "error",
-//             error: "Database error during ownership verification",
-//           }) + "\n"
-//         );
-//         res.end();
-//         return;
-//       }
-//     }
-
-//     // 🚀 IMMEDIATE PARALLEL PROCESSING WITH PERFORMANCE TRACKING
-//     const startTime = Date.now();
-
-//     // ✅ SMART FILE ANALYSIS (with caching)
-//     const fileAnalysisStart = Date.now();
-//     const fileAnalysis = getCachedFileAnalysis(userMessage);
-//     logAIPerformance(fileAnalysisStart, "Smart File Analysis", {
-//       confidence: fileAnalysis.confidence,
-//       shouldCreate: fileAnalysis.shouldCreateFile,
-//       intent: fileAnalysis.intent,
-//     });
-
-//     console.log("🔄 Starting parallel processing...");
-
-//     // ✅ FIXED: Add proper error handling for each promise
-//     let contextResult, fileContextResult, urlResult;
-
-//     try {
-//       // Task 1: URL Processing
-//       console.log("🔗 Starting URL processing...");
-//       const urlProcessingPromise = processUrlsOptimized(userMessage, res).catch(error => {
-//         console.error("❌ URL processing failed:", error);
-//         return { urlData: [], urlContent: "", processedUrls: [], fullUserMessage: userMessage };
-//       });
-
-//       // Task 2: Context Retrieval
-//       console.log("📚 Starting context retrieval...");
-//       const contextPromise = getConversationContextOptimized(
-//         conversation_id,
-//         user_id
-//       ).catch(error => {
-//         console.error("❌ Context retrieval failed:", error);
-//         return { summaryContext: "", shouldRename: false, newConversationName: null };
-//       });
-
-//       // Task 3: File context
-//       console.log("📄 Starting file context retrieval...");
-//       const fileContextPromise = getFileContextBasedOnUpload(
-//         conversation_id,
-//         user_id,
-//         extracted_summary,
-//         userMessage
-//       ).catch(error => {
-//         console.error("❌ File context retrieval failed:", error);
-//         return { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
-//       });
-
-//       // Task 4: Generate suggestions
-//       console.log("💡 Starting suggestions generation...");
-//       const suggestionPromise = generateFastSuggestions(userMessage).catch(error => {
-//         console.error("❌ Suggestions generation failed:", error);
-//         return [];
-//       });
-
-//       // ⚡ Get context immediately with proper error handling
-//       console.log("⏳ Waiting for parallel tasks to complete...");
-//       [contextResult, fileContextResult, urlResult] = await Promise.all([
-//         contextPromise,
-//         fileContextPromise,
-//         urlProcessingPromise,
-//       ]);
-
-//       console.log("✅ Parallel processing completed successfully");
-//       console.log("📊 Context result:", !!contextResult);
-//       console.log("📊 File context result:", !!fileContextResult);
-//       console.log("📊 URL result:", !!urlResult);
-
-//     } catch (parallelError) {
-//       console.error("❌ Parallel processing failed:", parallelError);
-      
-//       // Provide fallback values
-//       contextResult = { summaryContext: "", shouldRename: false, newConversationName: null };
-//       fileContextResult = { fileContext: "", fileNames: [], fileCount: 0, contextType: "error" };
-//       urlResult = { urlData: [], urlContent: "", processedUrls: [], fullUserMessage: userMessage };
-//     }
-
-//     const { summaryContext, shouldRename, newConversationName } = contextResult;
-//     const {
-//       fileContext = "",
-//       fileNames = [],
-//       fileCount = 0,
-//       contextType = "none",
-//     } = fileContextResult || {};
-
-//     const { urlData, urlContent, processedUrls, fullUserMessage } = urlResult;
-
-//     console.log("🔄 Getting suggestions...");
-//     let suggestions = [];
-//     try {
-//       suggestions = await generateFastSuggestions(userMessage);
-//       console.log("✅ Suggestions generated:", suggestions.length);
-//     } catch (suggestionError) {
-//       console.error("❌ Suggestions failed:", suggestionError);
-//       suggestions = [];
-//     }
-
-//     console.log(`⚡ Context loaded in ${Date.now() - startTime}ms`);
-
-//     // 🧠 GET USER INFO FOR PERSONALIZED RESPONSES
-//     let userInfo = null;
-//     try {
-//       const userResult = await executeQuery(
-//         "SELECT username FROM users WHERE id = ?",
-//         [user_id]
-//       );
-//       if (userResult && userResult.length > 0) {
-//         userInfo = { username: userResult[0].username };
-//         console.log("✅ User info loaded:", userInfo.username);
-//       }
-//     } catch (userError) {
-//       console.log(
-//         "⚠️ Could not fetch user info for personalization:",
-//         userError.message
-//       );
-//     }
-
-//     // 🧠 BUILD ENHANCED AI MESSAGES WITH SMART FILE DETECTION
-//     console.log("🧠 Building AI messages...");
-//     const messagesBuildStart = Date.now();
-//     const finalMessages = buildAIMessagesWithSmartContext(
-//       summaryContext,
-//       extracted_summary,
-//       fullUserMessage,
-//       userInfo,
-//       fileNames,
-//       fileContext,
-//       contextType,
-//       urlContent
-//     );
-//     logAIPerformance(messagesBuildStart, "AI Messages Build", {
-//       messagesCount: finalMessages.length,
-//       fileDetected: fileAnalysis.shouldCreateFile,
-//     });
-
-//     console.log("🤖 Starting AI model selection and response...");
-
-//     // 🚀 SMART MODEL SELECTION & AI RESPONSE STREAM
-//     let aiResponse = "";
-//     let rawAiResponse = "";
-//     const aiStartTime = Date.now();
-
-//     const modelSelection = await selectOptimalModel(finalMessages);
-//     const selectedModel = modelSelection.model;
-
-//     console.log(
-//       `🤖 Selected Model: ${selectedModel.toUpperCase()} | Tokens: ${
-//         modelSelection.tokenCount
-//       } | File Creation: ${fileAnalysis.shouldCreateFile ? "YES" : "NO"}`
-//     );
-
-//     let stream;
-
-//     try {
-//       console.log("🚀 Creating AI stream...");
-      
-//       if (selectedModel === "deepseek") {
-//         stream = await deepseek.chat.completions.create({
-//           model: "deepseek-chat",
-//           messages: finalMessages,
-//           temperature: fileAnalysis.shouldCreateFile ? 0.3 : 0.7,
-//           max_tokens: fileAnalysis.shouldCreateFile ? 3000 : 2000,
-//           stream: true,
-//         });
-//       } else {
-//         stream = await llama.chat.completions.create({
-//           messages: finalMessages,
-//           temperature: fileAnalysis.shouldCreateFile ? 0.3 : 0.7,
-//           max_tokens: fileAnalysis.shouldCreateFile ? 3000 : 2000,
-//           stream: true,
-//         });
-//       }
-
-//       console.log("✅ AI stream created successfully");
-
-//     } catch (modelError) {
-//       console.error(
-//         `❌ ${selectedModel.toUpperCase()} API failed:`,
-//         modelError.message
-//       );
-
-//       if (
-//         _file_upload_ids &&
-//         Array.isArray(_file_upload_ids) &&
-//         _file_upload_ids.length > 0
-//       ) {
-//         try {
-//           await rollbackPendingFiles(_file_upload_ids);
-//           console.log(
-//             `🔄 Rolled back ${_file_upload_ids.length} pending files`
-//           );
-//         } catch (rollbackError) {
-//           console.error("❌ Failed to rollback files:", rollbackError);
-//         }
-//       }
-
-//       try {
-//         console.log("📤 Sending error message to frontend...");
-//         res.write(
-//           JSON.stringify({
-//             type: "error",
-//             error:
-//               "I'm unable to process your request at the moment. Please try again in a few minutes.",
-//             timestamp: new Date().toISOString(),
-//           }) + "\n"
-//         );
-//         res.end();
-//         console.log("✅ Error message sent to frontend");
-//       } catch (responseError) {
-//         console.error("❌ Failed to send error response:", responseError);
-//       }
-
-//       return;
-//     }
-
-//     console.log("✅ Model API call successful, starting stream...");
-//     try {
-//       // Send initial metadata immediately with file analysis
-//       res.write(
-//         JSON.stringify({
-//           type: "start",
-//           conversation_id,
-//           conversation_name: shouldRename
-//             ? "Generating title..."
-//             : newConversationName,
-//           conversation_renamed: shouldRename,
-//           file_creation_mode: fileAnalysis.shouldCreateFile,
-//           file_analysis: {
-//             confidence: fileAnalysis.confidence,
-//             intent: fileAnalysis.intent,
-//             expected_file_type: fileAnalysis.fileType,
-//           },
-//           context: {
-//             document_available: !!extracted_summary,
-//             conversation_context_available: !!summaryContext,
-//             uploaded_files_available: fileCount > 0,
-//             uploaded_files_count: fileCount,
-//             uploaded_file_names: fileNames,
-//             file_context_type: contextType,
-//           },
-//           processing_time: Date.now() - startTime,
-//         }) + "\n"
-//       );
-
-//       console.log(
-//         `🚀 AI stream started with ${selectedModel.toUpperCase()} in ${
-//           Date.now() - aiStartTime
-//         }ms`
-//       );
-
-//       // ✅ ENHANCED STREAMING WITH PROPER CREATE_FILE HANDLING
-// let isInFileCreation = false;
-// let fileCreationBuffer = "";
-// let completeCreateFileContent = "";
-
-// // for await (const chunk of stream) {
-// //   if (chunk.choices && chunk.choices.length > 0) {
-// //     const content = chunk.choices[0].delta?.content || "";
-// //     if (content) {
-// //       rawAiResponse += content;
-      
-// //       // ✅ DETECT CREATE_FILE START
-// //       if (content.includes('[CREATE_FILE:') && !isInFileCreation) {
-// //         isInFileCreation = true;
-// //         fileCreationBuffer = content;
-// //         completeCreateFileContent = content;
-        
-// //         // Extract file info and send header
-// //         const match = content.match(/\[CREATE_FILE:([^:]+):([^:]+):/);
-// //         if (match) {
-// //           const [, fileType, fileName] = match;
-// //           const markdownHeader = `\n\n## 🎯 Creating ${fileType.toUpperCase()} Document: "${fileName.replace(/_/g, ' ')}"\n\n---\n\n`;
-          
-// //           aiResponse += markdownHeader;
-// //           res.write(JSON.stringify({
-// //             type: "content",
-// //             content: markdownHeader,
-// //           }) + "\n");
-// //         }
-        
-// //         continue; // Don't process content yet, wait for complete content
-// //       }
-      
-// //       // ✅ COLLECT ALL CONTENT DURING FILE CREATION
-// //       if (isInFileCreation) {
-// //         completeCreateFileContent += content;
-// //         fileCreationBuffer += content;
-        
-// //         // ✅ CHECK IF FILE CREATION IS COMPLETE
-// //         if (content.includes(']')) {
-// //           isInFileCreation = false;
-          
-// //           // ✅ EXTRACT COMPLETE CONTENT AND FORMAT IT PROPERLY
-// //           const completeMatch = completeCreateFileContent.match(/\[CREATE_FILE:([^:]+):([^:]+):([\s\S]*?)\]/);
-// //           if (completeMatch) {
-// //             const [, fileType, fileName, fileContent] = completeMatch;
-            
-// //             console.log(`📝 COMPLETE Content length: ${fileContent.length} chars`);
-// //             console.log(`📄 Raw content with \\n: ${fileContent.substring(0, 200)}`);
-            
-// //             // ✅ FIXED: Convert \n to actual newlines for display (this is the key fix)
-// //             const displayFormattedContent = fileContent
-// //               .replace(/\\n/g, '\n')       // Convert \n to actual newlines
-// //               .replace(/\\t/g, '    ')     // Convert \t to spaces
-// //               .replace(/\\\"/g, '"')       // Convert \" to "
-// //               .replace(/\\\'/g, "'")       // Convert \' to '
-// //               .trim();
-            
-// //             console.log(`📄 After newline conversion: ${displayFormattedContent.substring(0, 200)}`);
-            
-// //             // Stream the content with actual newlines
-// //             aiResponse += displayFormattedContent;
-// //             res.write(JSON.stringify({
-// //               type: "content",
-// //               content: displayFormattedContent,
-// //             }) + "\n");
-            
-// //             // Send completion message
-// //             const completionMarkdown = "\n\n---\n\n✅ **Document Generated Successfully!**\n\n";
-// //             aiResponse += completionMarkdown;
-// //             res.write(JSON.stringify({
-// //               type: "content",
-// //               content: completionMarkdown,
-// //             }) + "\n");
-// //           }
-          
-// //           // Reset buffers
-// //           fileCreationBuffer = "";
-// //           completeCreateFileContent = "";
-// //         }
-        
-// //         continue; // Don't process individual chunks during file creation
-// //       }
-      
-// //       // ✅ NORMAL CONTENT PROCESSING (this works fine)
-// //       let displayContent = formatLikeChatGPT(content);
-// //       aiResponse += displayContent;
-      
-// //       res.write(JSON.stringify({
-// //         type: "content",
-// //         content: displayContent,
-// //       }) + "\n");
-// //     }
-// //   }
-// // }
-// // ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
-// for await (const chunk of stream) {
-//   if (chunk.choices && chunk.choices.length > 0) {
-//     const content = chunk.choices[0].delta?.content || "";
-//     if (content) {
-//       rawAiResponse += content;
-      
-//       // ✅ CONVERT \n TO ACTUAL NEWLINES AND ESCAPE HTML
-//       let displayContent = content
-//         .replace(/\\n/g, '\n')       // Convert \n to actual newlines
-//         .replace(/\\t/g, '    ')     // Convert \t to spaces
-//         .replace(/\\\"/g, '"')       // Convert \" to quotes
-//         .replace(/\\\'/g, "'");      // Convert \' to apostrophes
-      
-//       // ✅ ESCAPE HTML CONTENT TO PREVENT RENDERING
-//       displayContent = escapeHtmlContent(displayContent);
-      
-//       // ✅ APPLY ADDITIONAL FORMATTING
-//       displayContent = formatLikeChatGPT(displayContent);
-      
-//       aiResponse += displayContent;
-      
-//       res.write(JSON.stringify({
-//         type: "content",
-//         content: displayContent,
-//       }) + "\n");
-//     }
-//   }
-// }
-
-
-
-//       logAIPerformance(aiStartTime, "AI Response Stream", {
-//         model: selectedModel,
-//         responseLength: aiResponse.length,
-//         fileCreationMode: fileAnalysis.shouldCreateFile,
-//       });
-
-//       // ✅ PROCESS FILES USING RAW RESPONSE
-//       let generatedFiles = [];
-//       let finalAiResponse = aiResponse;
-
-//       try {
-//         console.log(
-//           `🤖 Checking raw AI response for file generation requests...`
-//         );
-
-//         if (rawAiResponse.includes("[CREATE_FILE:")) {
-//           const fileGenStart = Date.now();
-
-//           res.write(
-//             JSON.stringify({
-//               type: "file_generation",
-//               status: "processing",
-//               message: "⚡ Processing your document...",
-//             }) + "\n"
-//           );
-
-//           const fileGenerationResult = await handleAIFileGeneration(
-//             rawAiResponse,
-//             conversation_id,
-//             user_id,
-//             res
-//           );
-
-//           logAIPerformance(fileGenStart, "File Generation", {
-//             filesCreated: fileGenerationResult.generatedFiles?.length || 0,
-//           });
-
-//           if (fileGenerationResult.hasGeneratedFiles) {
-//             generatedFiles = fileGenerationResult.generatedFiles;
-
-//             // Add professional download links
-//             generatedFiles.forEach((file) => {
-//               const downloadLink = `\n\n📄 **${
-//                 file.originalFilename || file.filename
-//               }.${
-//                 file.fileType
-//               }** - Professional document ready!\n🔗 [**Download ${
-//                 file.originalFilename || file.filename
-//               }**](${file.downloadUrl})\n*File size: ${(
-//                 file.size / 1024
-//               ).toFixed(1)} KB*\n`;
-
-//               res.write(
-//                 JSON.stringify({
-//                   type: "content",
-//                   content: downloadLink,
-//                 }) + "\n"
-//               );
-//             });
-
-//             console.log(
-//               `✅ AI generated ${generatedFiles.length} file(s) successfully`
-//             );
-//           }
-
-//           // Send completion event
-//           res.write(
-//             JSON.stringify({
-//               type: "file_created",
-//               status: "completed",
-//               files_count: generatedFiles.length,
-//               message:
-//                 generatedFiles.length > 0
-//                   ? "🎉 Documents created successfully!"
-//                   : "⚠️ No files were created",
-//             }) + "\n"
-//           );
-//         }
-//         // ✅ APPLY COMPLETE FORMATTING AT THE END
-//         // const finalFormattedResponse = formatLikeChatGPT(finalAiResponse, true);
-//       } catch (fileError) {
-//         console.error("❌ AI file generation failed:", fileError);
-
-//         res.write(
-//           JSON.stringify({
-//             type: "file_error",
-//             error: "File creation failed",
-//             message: fileError.message,
-//           }) + "\n"
-//         );
-//       }
-
-//       // 🚀 HANDLE RENAME RESULT
-//       let finalConversationName = newConversationName;
-//       if (shouldRename) {
-//         try {
-//           const renameResult = await executeRename(
-//             conversation_id,
-//             userMessage,
-//             user_id
-//           );
-//           if (renameResult.success) {
-//             finalConversationName = renameResult.title;
-//             res.write(
-//               JSON.stringify({
-//                 type: "conversation_renamed",
-//                 conversation_id: conversation_id,
-//                 new_name: finalConversationName,
-//                 success: true,
-//               }) + "\n"
-//             );
-//           }
-//         } catch (renameError) {
-//           console.error("❌ Rename failed:", renameError);
-//         }
-//       }
-
-//       // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
-//       // ✅ CONFIRM FILES AFTER SUCCESSFUL AI RESPONSE
-//       if (
-//         _file_upload_ids &&
-//         Array.isArray(_file_upload_ids) &&
-//         _file_upload_ids.length > 0
-//       ) {
-//         try {
-//           await confirmPendingFiles(_file_upload_ids);
-//           console.log(
-//             `✅ Confirmed ${_file_upload_ids.length} files after successful AI response`
-//           );
-//         } catch (confirmError) {
-//           console.error("❌ Failed to confirm files:", confirmError);
-//         }
-//       }
-
-//       // Send final data with enhanced information
-//       res.write(
-//         JSON.stringify({
-//           type: "end",
-//           suggestions: suggestions,
-//           full_response: finalAiResponse,
-//           processed_urls: urlData.map((data) => ({
-//             url: data.url,
-//             title: data.title,
-//             success: !data.error,
-//             error: data.error,
-//             site_type: data.metadata?.siteType,
-//             content_length: data.content?.length || 0,
-//           })),
-//           // ✅ ENHANCED: Send generated files with professional info
-//           generated_files: generatedFiles.map((file) => ({
-//             filename: file.originalFilename || file.filename,
-//             actual_filename: file.filename,
-//             type: file.fileType,
-//             size: file.size,
-//             size_formatted: `${(file.size / 1024).toFixed(1)} KB`,
-//             download_url: file.downloadUrl,
-//             ai_generated: true,
-//             created_at: new Date().toISOString(),
-//             professional: true,
-//           })),
-//           // ✅ ENHANCED CONTEXT INFO
-//           context: {
-//             document_available: !!extracted_summary,
-//             conversation_context_available: !!summaryContext,
-//             url_content_available: !!urlContent,
-//             urls_processed: urlData.length,
-//             uploaded_files_available: fileCount > 0,
-//             uploaded_files_count: fileCount,
-//             file_context_type: contextType,
-//             files_generated: generatedFiles.length,
-//             ai_analysis: {
-//               file_creation_detected: fileAnalysis.shouldCreateFile,
-//               confidence: fileAnalysis.confidence,
-//               intent: fileAnalysis.intent,
-//               model_used: selectedModel,
-//             },
-//           },
-//           performance: {
-//             total_processing_time: Date.now() - startTime,
-//             ai_response_time: Date.now() - aiStartTime,
-//             files_created: generatedFiles.length,
-//             model_used: selectedModel.toUpperCase(),
-//           },
-//         }) + "\n"
-//       );
-
-//       res.end();
-
-//       // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT)
-//       process.nextTick(() => {
-//         // ✅ ENSURE finalAiResponse includes download links
-//         let responseWithLinks = aiResponse;
-
-//         if (generatedFiles && generatedFiles.length > 0) {
-//           generatedFiles.forEach((file) => {
-//             const downloadLink = `\n\n📄 **${
-//               file.originalFilename || file.filename
-//             }.${
-//               file.fileType
-//             }** - Professional document ready!\n🔗 [**Download ${
-//               file.originalFilename || file.filename
-//             }**](${file.downloadUrl})\n*File size: ${(file.size / 1024).toFixed(
-//               1
-//             )} KB*\n`;
-//             responseWithLinks += downloadLink;
-//           });
-//         }
-
-//         handleAllBackgroundTasksOptimizedWithFiles(
-//           conversation_id,
-//           fullUserMessage,
-//           responseWithLinks,
-//           extracted_summary,
-//           suggestions,
-//           user_id,
-//           shouldRename,
-//           finalConversationName,
-//           processedUrls,
-//           urlData,
-//           urlContent,
-//           fileContext,
-//           _file_upload_ids,
-//           generatedFiles
-//         );
-//       });
-//     } catch (streamError) {
-//       console.error("❌ Streaming error:", streamError);
-
-//       if (
-//         _file_upload_ids &&
-//         Array.isArray(_file_upload_ids) &&
-//         _file_upload_ids.length > 0
-//       ) {
-//         try {
-//           await rollbackPendingFiles(_file_upload_ids);
-//         } catch (rollbackError) {
-//           console.error("❌ Failed to rollback files:", rollbackError);
-//         }
-//       }
-
-//       if (!res.headersSent) {
-//         try {
-//           res.write(
-//             JSON.stringify({
-//               type: "error",
-//               error:
-//                 "I'm unable to process your request at the moment. Please try again in a few minutes.",
-//             }) + "\n"
-//           );
-//           res.end();
-//         } catch (responseError) {
-//           console.error(
-//             "❌ Failed to send streaming error response:",
-//             responseError
-//           );
-//         }
-//       }
-//     }
-//   } catch (error) {
-//     console.error("❌ Chat controller error:", error.message);
-//      console.error("❌ Full error:", error);
-//     await rollbackPendingFiles(_file_upload_ids);
-
-//     if (!res.headersSent) {
-//       res.status(500).json({ error: "Internal server error" });
-//     }
-//   }
-// };
-
+// working 
 exports.askChatbot = async (req, res) => {
   console.log("✅ Received request at /chat:", req.body);
 
@@ -1800,13 +1101,29 @@ exports.askChatbot = async (req, res) => {
           Date.now() - aiStartTime
         }ms`
       );
+ 
 
-      // ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
-//       for await (const chunk of stream) {
+// ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
+// let isInCreateFile = false;
+// let createFileBuffer = "";
+
+// for await (const chunk of stream) {
 //   if (chunk.choices && chunk.choices.length > 0) {
 //     const content = chunk.choices[0].delta?.content || "";
 //     if (content) {
 //       rawAiResponse += content;
+      
+//       // ✅ DETECT CREATE_FILE START/END
+//       if (content.includes('[CREATE_FILE:')) {
+//         isInCreateFile = true;
+//         createFileBuffer = content;
+//       } else if (isInCreateFile) {
+//         createFileBuffer += content;
+//         if (content.includes(']')) {
+//           isInCreateFile = false;
+//           createFileBuffer = "";
+//         }
+//       }
       
 //       // ✅ SIMPLE FIX: Process content in correct order
 //       let displayContent = content;
@@ -1818,10 +1135,29 @@ exports.askChatbot = async (req, res) => {
 //         .replace(/\\\"/g, '"')       // Convert \" to quotes
 //         .replace(/\\\'/g, "'");      // Convert \' to apostrophes
       
-//       // Step 2: Escape HTML BEFORE applying formatting
-//       displayContent = escapeHtmlContent(displayContent);
+//       // Step 2: Handle HTML content ONLY inside CREATE_FILE
+//       if (isInCreateFile) {
+//         // Check if this is HTML content
+//         if (displayContent.includes('<!DOCTYPE html>') || 
+//             displayContent.includes('<html') || 
+//             displayContent.includes('<head>') || 
+//             displayContent.includes('<body>') ||
+//             displayContent.includes('<div') ||
+//             displayContent.includes('<p>') ||
+//             displayContent.includes('<h1>') ||
+//             displayContent.includes('<style>')) {
+          
+//           // Escape HTML for display
+//           displayContent = displayContent
+//             .replace(/&/g, '&amp;')
+//             .replace(/</g, '&lt;')
+//             .replace(/>/g, '&gt;')
+//             .replace(/"/g, '&quot;')
+//             .replace(/'/g, '&#39;');
+//         }
+//       }
       
-//       // Step 3: Apply ChatGPT-like formatting AFTER HTML escaping
+//       // Step 3: Apply ChatGPT-like formatting (will skip if HTML is escaped)
 //       displayContent = formatLikeChatGPT(displayContent);
       
 //       aiResponse += displayContent;
@@ -1834,20 +1170,58 @@ exports.askChatbot = async (req, res) => {
 //   }
 // }
 // ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
-// let isInCreateFile = false;
-// let createFileBuffer = "";
-// if (isInCreateFile) {
-//   displayContent = displayContent
-//     .replace(/&/g, '&amp;')
-//     .replace(/</g, '&lt;')
-//     .replace(/>/g, '&gt;')
-//     .replace(/"/g, '&quot;')
-//     .replace(/'/g, '&#39;');
-// }
+// ✅ ENHANCED STREAMING WITH PROPER CODE BLOCK HANDLING FOR CREATE_FILE
+// ✅ ENHANCED STREAMING WITH PROPER CODE BLOCK HANDLING FOR CREATE_FILE
+// ✅ SIMPLE AND EFFECTIVE STREAMING WITH HTML PROTECTION
+// ✅ TARGETED FIX FOR HTML IN CREATE_FILE BLOCKS
+// ✅ SIMPLE FIX: Handle CREATE_FILE with HTML content
+ 
 
-// ✅ ENHANCED STREAMING WITH PROPER HTML ESCAPING
+// ✅ FIXED: Proper CREATE_FILE detection and handling
 let isInCreateFile = false;
 let createFileBuffer = "";
+let shouldWrapInCodeBlock = false;
+let codeBlockStarted = false;
+
+// for await (const chunk of stream) {
+//   if (chunk.choices && chunk.choices.length > 0) {
+//     const content = chunk.choices[0].delta?.content || "";
+//     if (content) {
+//       rawAiResponse += content;
+      
+//       let displayContent = content;
+      
+//       // Convert escape sequences
+//       displayContent = displayContent
+//         .replace(/\\n/g, '\n')
+//         .replace(/\\t/g, '\t')
+//         .replace(/\\\"/g, '"')
+//         .replace(/\\\'/g, "'");
+
+//       // Only escape HTML if we're inside CREATE_FILE content
+//       const recentContent = (aiResponse + displayContent).slice(-500);
+//       const isLikelyInCreateFile = recentContent.includes('[CREATE_FILE:') && 
+//                                   !recentContent.includes(']') && 
+//                                   recentContent.includes(':') &&
+//                                   (recentContent.match(/:/g) || []).length >= 2;
+
+//       if (isLikelyInCreateFile) {
+//         displayContent = displayContent
+//           .replace(/</g, '&lt;')
+//           .replace(/>/g, '&gt;');
+//       }
+      
+//       displayContent = formatLikeChatGPT(displayContent);
+      
+//       aiResponse += displayContent;
+      
+//       res.write(JSON.stringify({
+//         type: "content",
+//         content: displayContent,
+//       }) + "\n");
+//     }
+//   }
+// }
 
 for await (const chunk of stream) {
   if (chunk.choices && chunk.choices.length > 0) {
@@ -1855,52 +1229,32 @@ for await (const chunk of stream) {
     if (content) {
       rawAiResponse += content;
       
-      // ✅ DETECT CREATE_FILE START/END
-      if (content.includes('[CREATE_FILE:')) {
-        isInCreateFile = true;
-        createFileBuffer = content;
-      } else if (isInCreateFile) {
-        createFileBuffer += content;
-        if (content.includes(']')) {
-          isInCreateFile = false;
-          createFileBuffer = "";
-        }
-      }
-      
-      // ✅ SIMPLE FIX: Process content in correct order
       let displayContent = content;
       
-      // Step 1: Convert escape sequences to actual characters
+      // Convert escape sequences
       displayContent = displayContent
-        .replace(/\\n/g, '\n')       // Convert \n to actual newlines
-        .replace(/\\t/g, '\t')       // Convert \t to actual tabs
-        .replace(/\\\"/g, '"')       // Convert \" to quotes
-        .replace(/\\\'/g, "'");      // Convert \' to apostrophes
-      
-      // Step 2: Handle HTML content ONLY inside CREATE_FILE
-      if (isInCreateFile) {
-        // Check if this is HTML content
-        if (displayContent.includes('<!DOCTYPE html>') || 
-            displayContent.includes('<html') || 
-            displayContent.includes('<head>') || 
-            displayContent.includes('<body>') ||
-            displayContent.includes('<div') ||
-            displayContent.includes('<p>') ||
-            displayContent.includes('<h1>') ||
-            displayContent.includes('<style>')) {
-          
-          // Escape HTML for display
-          displayContent = displayContent
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-        }
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\\"/g, '"')
+        .replace(/\\\'/g, "'");
+
+      // Only escape HTML if we're inside CREATE_FILE content
+      const recentContent = (aiResponse + displayContent).slice(-500);
+      const isLikelyInCreateFile = recentContent.includes('[CREATE_FILE:') && 
+                                  !recentContent.includes(']') && 
+                                  recentContent.includes(':') &&
+                                  (recentContent.match(/:/g) || []).length >= 2;
+
+      if (isLikelyInCreateFile) {
+        // ✅ FIXED: Apply table formatting BEFORE HTML escaping
+        displayContent = formatLikeChatGPT(displayContent);
+        displayContent = displayContent
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      } else {
+        // ✅ For normal content, apply formatting as usual
+        displayContent = formatLikeChatGPT(displayContent);
       }
-      
-      // Step 3: Apply ChatGPT-like formatting (will skip if HTML is escaped)
-      displayContent = formatLikeChatGPT(displayContent);
       
       aiResponse += displayContent;
       
@@ -1911,6 +1265,11 @@ for await (const chunk of stream) {
     }
   }
 }
+
+
+
+
+
 
 
       logAIPerformance(aiStartTime, "AI Response Stream", {
