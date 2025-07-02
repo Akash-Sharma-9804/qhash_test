@@ -436,33 +436,92 @@ exports.getConversationHistory = async (req, res) => {
     );
 
     const formattedHistory = history.map((msg) => {
-      let files = [];
+      
       let aiGeneratedFiles = [];
+let files = [];
 
-      // ✅ HANDLE UPLOADED FILES (existing logic)
-      if (msg.file_metadata) {
+console.log("🔍 Processing files for message:", msg.id, {
+  has_file_metadata: !!msg.file_metadata,
+  file_path: msg.file_path,
+  file_names: msg.file_names
+});
+
+if (msg.file_metadata) {
+  try {
+    let metadata = JSON.parse(msg.file_metadata);
+    // console.log("📄 Parsed file metadata:", metadata);
+    
+    // ✅ HANDLE ARRAY OF JSON STRINGS (Your current format)
+    if (Array.isArray(metadata)) {
+      files = [];
+      metadata.forEach((item, index) => {
         try {
-          const metadata = JSON.parse(msg.file_metadata);
-          files = metadata.map((file) => ({
-            file_path: file.file_path,
-            file_name: file.original_filename || file.display_filename,
+          // ✅ Parse each JSON string in the array
+          const fileData = typeof item === 'string' ? JSON.parse(item) : item;
+          // console.log(`📁 Processing file ${index + 1}:`, fileData);
+          
+          files.push({
+            file_path: fileData.file_path || msg.file_path || '',
+            file_name: fileData.original_filename || fileData.display_filename || fileData.filename || msg.file_names || `file-${index + 1}`,
             display_name: sanitizeDisplayName(
-              file.original_filename || file.display_filename
+              fileData.original_filename || fileData.display_filename || fileData.filename || msg.file_names || `file-${index + 1}`
             ),
-            unique_filename: file.unique_filename,
-            file_size: file.file_size,
-            mime_type: file.mime_type,
-            type: file.file_path?.split(".").pop() || "file",
-            upload_timestamp: file.upload_timestamp,
+            unique_filename: fileData.unique_filename || '',
+            file_size: fileData.file_size || 0,
+            mime_type: fileData.mime_type || 'application/octet-stream',
+            type: (fileData.original_filename || fileData.filename || '').split(".").pop() || "file",
+            upload_timestamp: fileData.upload_timestamp || msg.created_at,
             is_secure: true,
-          }));
-        } catch (parseError) {
-          console.error("❌ Error parsing file metadata:", parseError);
-          files = parseLegacyFileFormat(msg.file_path, msg.file_names);
+            extraction_status: fileData.extraction_status || 'unknown'
+          });
+        } catch (innerParseError) {
+          console.error(`❌ Error parsing file metadata item ${index}:`, innerParseError);
+          // ✅ Fallback to legacy format for this item
+          files.push({
+            file_path: msg.file_path || '',
+            file_name: msg.file_names || `file-${index + 1}`,
+            display_name: sanitizeDisplayName(msg.file_names || `file-${index + 1}`),
+            unique_filename: '',
+            file_size: 0,
+            mime_type: 'application/octet-stream',
+            type: (msg.file_names || '').split(".").pop() || "file",
+            upload_timestamp: msg.created_at,
+            is_secure: false,
+            legacy_format: true
+          });
         }
-      } else {
-        files = parseLegacyFileFormat(msg.file_path, msg.file_names);
-      }
+      });
+      console.log("✅ Processed files from metadata array:", files.length);
+    } 
+    // ✅ HANDLE DIRECT OBJECT (Alternative format)
+    else if (metadata && typeof metadata === 'object') {
+      files = [{
+        file_path: metadata.file_path || msg.file_path || '',
+        file_name: metadata.original_filename || metadata.display_filename || metadata.filename || msg.file_names || 'file-1',
+        display_name: sanitizeDisplayName(
+          metadata.original_filename || metadata.display_filename || metadata.filename || msg.file_names || 'file-1'
+        ),
+        unique_filename: metadata.unique_filename || '',
+        file_size: metadata.file_size || 0,
+        mime_type: metadata.mime_type || 'application/octet-stream',
+        type: (metadata.original_filename || metadata.filename || '').split(".").pop() || "file",
+        upload_timestamp: metadata.upload_timestamp || msg.created_at,
+        is_secure: true,
+        extraction_status: metadata.extraction_status || 'unknown'
+      }];
+      console.log("✅ Processed single file from metadata object");
+    }
+  } catch (parseError) {
+    console.error("❌ Error parsing file metadata:", parseError);
+    files = parseLegacyFileFormat(msg.file_path, msg.file_names);
+  }
+} else if (msg.file_path || msg.file_names) {
+  // Handle legacy format
+  console.log("📁 Using legacy file format");
+  files = parseLegacyFileFormat(msg.file_path, msg.file_names);
+}
+
+// console.log("📊 Final files array:", files);
 
       // ✅ HANDLE AI GENERATED FILES
       if (msg.generated_files_info) {
@@ -551,6 +610,7 @@ exports.getConversationHistory = async (req, res) => {
         ),
       },
     });
+    
   } catch (error) {
     console.error("❌ Error fetching conversation history:", error.message);
     return res
