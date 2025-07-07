@@ -113,26 +113,38 @@ const handleDictateMode = (ws, userId) => {
   let transcriptCount = 0;
 
   deepgramSocket.on("open", () => {
-    console.log("✅ [Dictate] Deepgram WebSocket connection opened successfully");
+    console.log(
+      "✅ [Dictate] Deepgram WebSocket connection opened successfully"
+    );
     isDGReady = true;
-    
-    console.log(`📦 [Dictate] Processing ${audioQueue.length} queued audio chunks`);
+
+    console.log(
+      `📦 [Dictate] Processing ${audioQueue.length} queued audio chunks`
+    );
     while (audioQueue.length > 0) {
       const chunk = audioQueue.shift();
       deepgramSocket.send(chunk);
-      console.log(`🔊 [Dictate] Sent queued audio chunk: ${chunk.length} bytes`);
+      console.log(
+        `🔊 [Dictate] Sent queued audio chunk: ${chunk.length} bytes`
+      );
     }
 
-    ws.send(JSON.stringify({ 
-      type: "dictate-ready"
-    }));
+    ws.send(
+      JSON.stringify({
+        type: "dictate-ready",
+      })
+    );
     console.log("📤 [Dictate] Sent 'dictate-ready' to frontend");
   });
 
   deepgramSocket.on("message", (msg) => {
     try {
-      console.log(`📨 [Dictate] Raw message received from Deepgram: ${msg.toString().substring(0, 200)}...`);
-      
+      console.log(
+        `📨 [Dictate] Raw message received from Deepgram: ${msg
+          .toString()
+          .substring(0, 200)}...`
+      );
+
       const data = JSON.parse(msg.toString());
       const transcript = data.channel?.alternatives?.[0]?.transcript;
       const confidence = data.channel?.alternatives?.[0]?.confidence;
@@ -143,24 +155,28 @@ const handleDictateMode = (ws, userId) => {
         confidence: confidence,
         is_final: isFinal,
         has_transcript: !!transcript,
-        transcript_length: transcript?.length || 0
+        transcript_length: transcript?.length || 0,
       });
 
       if (transcript && transcript.trim() !== "") {
         transcriptCount++;
-        console.log(`🎯 [Dictate #${transcriptCount}] Valid transcript found: "${transcript}"`);
-        
-        const responseData = { 
-          type: "dictate-transcript", 
+        console.log(
+          `🎯 [Dictate #${transcriptCount}] Valid transcript found: "${transcript}"`
+        );
+
+        const responseData = {
+          type: "dictate-transcript",
           text: transcript,
           is_final: isFinal || false,
-          confidence: confidence || 0
+          confidence: confidence || 0,
         };
-        
+
         ws.send(JSON.stringify(responseData));
         console.log(`📤 [Dictate] Sent transcript to frontend:`, responseData);
       } else {
-        console.log(`⚠️ [Dictate] Empty transcript - audio might be silent or encoding mismatch`);
+        console.log(
+          `⚠️ [Dictate] Empty transcript - audio might be silent or encoding mismatch`
+        );
       }
     } catch (err) {
       console.error("❌ [Dictate] Error parsing Deepgram message:", err);
@@ -173,7 +189,9 @@ const handleDictateMode = (ws, userId) => {
   });
 
   deepgramSocket.on("close", (code, reason) => {
-    console.log(`🔌 [Dictate] Deepgram WebSocket closed. Code: ${code}, Reason: ${reason}`);
+    console.log(
+      `🔌 [Dictate] Deepgram WebSocket closed. Code: ${code}, Reason: ${reason}`
+    );
   });
 
   const handleDictateMessage = (data) => {
@@ -183,7 +201,7 @@ const handleDictateMode = (ws, userId) => {
         if (parsed.type === "stop-dictate") {
           console.log("🛑 [Dictate] Stop dictate command received");
           deepgramSocket.close();
-          ws.removeListener('message', handleDictateMessage);
+          ws.removeListener("message", handleDictateMessage);
           ws.send(JSON.stringify({ type: "dictate-stopped" }));
           return;
         }
@@ -194,11 +212,15 @@ const handleDictateMode = (ws, userId) => {
 
     if (Buffer.isBuffer(data)) {
       audioChunkCount++;
-      console.log(`🔊 [Dictate Audio #${audioChunkCount}] Received audio chunk: ${data.length} bytes`);
-      
+      console.log(
+        `🔊 [Dictate Audio #${audioChunkCount}] Received audio chunk: ${data.length} bytes`
+      );
+
       if (isDGReady && deepgramSocket.readyState === WebSocket.OPEN) {
         deepgramSocket.send(data);
-        console.log(`📤 [Dictate] Sent audio chunk to Deepgram: ${data.length} bytes`);
+        console.log(
+          `📤 [Dictate] Sent audio chunk to Deepgram: ${data.length} bytes`
+        );
       } else {
         audioQueue.push(data);
         console.log(`📦 [Dictate] Queued audio chunk: ${data.length} bytes`);
@@ -206,22 +228,20 @@ const handleDictateMode = (ws, userId) => {
     }
   };
 
-  ws.on('message', handleDictateMessage);
+  ws.on("message", handleDictateMessage);
 
   ws.on("close", () => {
     console.log(`🔌 [Dictate] Client WebSocket closed for user: ${userId}`);
-    console.log(`📊 [Dictate] Session stats - Audio chunks: ${audioChunkCount}, Transcripts: ${transcriptCount}`);
-    
+    console.log(
+      `📊 [Dictate] Session stats - Audio chunks: ${audioChunkCount}, Transcripts: ${transcriptCount}`
+    );
+
     if (deepgramSocket.readyState === WebSocket.OPEN) {
       deepgramSocket.close();
     }
-    ws.removeListener('message', handleDictateMessage);
+    ws.removeListener("message", handleDictateMessage);
   });
 };
-
-
-
-
 
 // const handleLiveVoiceMessage = (ws, userId) => {
 //   console.log(`🎤 [Voice] Starting live session for user: ${userId}`);
@@ -328,6 +348,12 @@ const executeQuery = async (sql, params = []) => {
   }
 };
 
+let sttStartTime = null;
+let aiStartTime = null;
+let ttsStartTime = null;
+let firstAIChunkTime = null;
+let firstTTSChunkTime = null;
+
 // 🚀 OPTIMIZED CONTEXT RETRIEVAL (from chatController)
 async function getConversationContextOptimized(conversation_id, user_id) {
   if (!conversation_id) {
@@ -341,17 +367,17 @@ async function getConversationContextOptimized(conversation_id, user_id) {
   try {
     const results = await executeQuery(
       `SELECT 
-        c.name as conversation_name,
-        ch.summarized_chat,
-        ch.user_message,
-        ch.response,
-        ch.url_content,
-        ch.extracted_text
-       FROM conversations c
-       LEFT JOIN chat_history ch ON ch.conversation_id = c.id
-       WHERE c.id = ? AND c.user_id = ?
-       ORDER BY ch.created_at DESC
-       LIMIT 5`,
+          c.name as conversation_name,
+          ch.summarized_chat,
+          ch.user_message,
+          ch.response,
+          ch.url_content,
+          ch.extracted_text
+        FROM conversations c
+        LEFT JOIN chat_history ch ON ch.conversation_id = c.id
+        WHERE c.id = ? AND c.user_id = ?
+        ORDER BY ch.created_at DESC
+        LIMIT 3`,
       [conversation_id, user_id]
     );
 
@@ -362,14 +388,18 @@ async function getConversationContextOptimized(conversation_id, user_id) {
     if (results && results.length > 0) {
       const conversationName = results[0]?.conversation_name;
 
-      if (conversationName === "New Conversation" || 
-          conversationName === "New Chat" || 
-          !conversationName) {
+      if (
+        conversationName === "New Conversation" ||
+        conversationName === "New Chat" ||
+        !conversationName
+      ) {
         shouldRename = true;
       }
 
-      const latestSummary = results.find(r => r.summarized_chat)?.summarized_chat;
-      
+      const latestSummary = results.find(
+        (r) => r.summarized_chat
+      )?.summarized_chat;
+
       if (latestSummary) {
         summaryContext = latestSummary;
         console.log("✅ Using existing summary for context");
@@ -380,8 +410,10 @@ async function getConversationContextOptimized(conversation_id, user_id) {
           .reverse()
           .map((item) => {
             let context = "";
-            if (item.user_message) context += `User: ${item.user_message.substring(0, 150)}\n`;
-            if (item.response) context += `AI: ${item.response.substring(0, 150)}\n`;
+            if (item.user_message)
+              context += `User: ${item.user_message.substring(0, 150)}\n`;
+            if (item.response)
+              context += `AI: ${item.response.substring(0, 150)}\n`;
             return context;
           })
           .join("");
@@ -404,9 +436,10 @@ async function getConversationContextOptimized(conversation_id, user_id) {
   }
 }
 
- 
 // 🧠 BUILD AI MESSAGES FOR VOICE MODE - Optimized for short, conversational responses
 // 🧠 BUILD AI MESSAGES FOR VOICE MODE - Optimized for short, conversational responses
+// ✅ IMPROVED SYSTEM PROMPT for better responses
+// ✅ IMPROVED SYSTEM PROMPT - Allow markdown for frontend display
 function buildAIMessages(summaryContext, userMessage, userInfo = null) {
   const currentDate = new Date().toLocaleDateString("en-US", {
     year: "numeric",
@@ -414,7 +447,7 @@ function buildAIMessages(summaryContext, userMessage, userInfo = null) {
     day: "numeric",
   });
 
-  // Build user context for personalized responses (more natural approach)
+  // Build user context for personalized responses
   let userContext = "";
   if (userInfo && userInfo.username) {
     userContext = `You're chatting with ${userInfo.username}. Use their name sparingly and naturally - only when it feels conversational, like greeting them or when being supportive.`;
@@ -429,27 +462,32 @@ Current date: ${currentDate}.
 ${userContext}
 
 VOICE MODE GUIDELINES:
-- Keep responses SHORT and CONVERSATIONAL (3-4 sentences maximum)
-- Speak naturally and warmly, like a helpful friend
-- Be direct but friendly - get to the point quickly
-- Use a casual, approachable tone
-- Avoid repetitive name usage - only use names when it feels natural
-- If complex topics need detailed answers, offer briefly: "Want me to dive deeper into that?"
-- Sound human and relatable, not robotic
+- Provide ACCURATE and COMPLETE answers to user questions
+- Be conversational but thorough - don't sacrifice accuracy for brevity
+- For simple questions: Keep responses concise (2-3 sentences)
+- For complex questions: Provide detailed explanations (up to 4-5 sentences if needed)
+- Always prioritize correctness over speed
+- If you need to explain something technical, break it down clearly
+- Use a warm, helpful tone but ensure information is comprehensive
+- For factual questions: Provide specific, accurate information
+- For how-to questions: Give step-by-step guidance
+- If unsure about something, acknowledge it rather than guessing
+- You can use markdown formatting (**bold**, *italic*, etc.) for better text display
+- Use formatting to emphasize important points and improve readability
 
 When asked your name: "I'm QhashAI, built by the QuantumHash team."
-For complex requests: Give a concise answer first, then ask if they want more details.
+For complex requests: Give a complete answer, then offer to elaborate if needed.
 
-Remember: This is a friendly voice conversation - keep it natural, warm, and brief!`,
+Remember: Accuracy and helpfulness are more important than being brief. Users need correct, complete information.`,
   };
 
   const finalMessages = [systemPrompt];
 
-  // Add conversation context if available (but keep it concise for voice)
+  // ✅ INCREASED context limit for better understanding
   if (summaryContext) {
     finalMessages.push({
       role: "system",
-      content: `CONVERSATION CONTEXT: ${summaryContext.substring(0, 500)}`, // Limit context for voice mode
+      content: `CONVERSATION CONTEXT: ${summaryContext.substring(0, 1000)}`, // ✅ INCREASED from 500 to 1000
     });
   }
 
@@ -458,7 +496,43 @@ Remember: This is a friendly voice conversation - keep it natural, warm, and bri
   return finalMessages;
 }
 
+// ✅ HELPER FUNCTION: Clean markdown formatting for TTS
+function cleanMarkdownForTTS(text) {
+  if (!text) return text;
 
+  return (
+    text
+      // Remove bold formatting: **text** or __text__ -> text
+      .replace(/\*\*(.*?)\*\*/g, "$1")
+      .replace(/__(.*?)__/g, "$1")
+
+      // Remove italic formatting: *text* or _text_ -> text
+      .replace(/\*(.*?)\*/g, "$1")
+      .replace(/_(.*?)_/g, "$1")
+
+      // Remove strikethrough: ~~text~~ -> text
+      .replace(/~~(.*?)~~/g, "$1")
+
+      // Remove code formatting: `code` -> code
+      .replace(/`(.*?)`/g, "$1")
+
+      // Remove headers: # Header -> Header
+      .replace(/^#{1,6}\s+/gm, "")
+
+      // Remove list markers: - item or * item -> item
+      .replace(/^[\s]*[-\*\+]\s+/gm, "")
+
+      // Remove numbered list markers: 1. item -> item
+      .replace(/^[\s]*\d+\.\s+/gm, "")
+
+      // Remove links: [text](url) -> text
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1")
+
+      // Remove extra whitespace and normalize
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
 
 const SILENT_PCM_FRAME = Buffer.alloc(320, 0);
 let silenceInterval = null;
@@ -481,7 +555,9 @@ const stopSendingSilence = () => {
 };
 
 const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
-  console.log(`🎤 [Voice] Starting live session for user: ${userId}, conversation: ${conversationId}`);
+  console.log(
+    `🎤 [Voice] Starting live session for user: ${userId}, conversation: ${conversationId}`
+  );
 
   // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED (like chatController.js)
   if (conversationId && !isNaN(conversationId)) {
@@ -491,8 +567,10 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
     );
 
     if (!ownershipCheck || ownershipCheck.length === 0) {
-      console.warn("⚠️ Provided conversation invalid or not owned. Trying fallback...");
-      
+      console.warn(
+        "⚠️ Provided conversation invalid or not owned. Trying fallback..."
+      );
+
       // Try fallback to latest conversation (like chatController.js)
       const latest = await executeQuery(
         `SELECT id FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY updated_at DESC LIMIT 1`,
@@ -501,10 +579,15 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
 
       if (latest && latest.length > 0) {
         conversationId = latest[0].id;
-        console.log("✅ Fallback to latest active conversation:", conversationId);
+        console.log(
+          "✅ Fallback to latest active conversation:",
+          conversationId
+        );
       } else {
         console.error("❌ No valid conversation found and none provided.");
-        ws.send(JSON.stringify({ type: "error", error: "No conversation found." }));
+        ws.send(
+          JSON.stringify({ type: "error", error: "No conversation found." })
+        );
         return;
       }
     } else {
@@ -512,17 +595,24 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
     }
   } else {
     // ✅ NO CONVERSATION PROVIDED - Use empty conversation logic (like chatController.js createConversation)
-    console.log("🔍 No conversation provided, checking for empty conversations...");
-    
+    console.log(
+      "🔍 No conversation provided, checking for empty conversations..."
+    );
+
     const recentConversations = await executeQuery(
       `SELECT id, name FROM conversations 
-       WHERE user_id = ? AND is_deleted = FALSE
-       ORDER BY created_at DESC 
-       LIMIT 1`,
+        WHERE user_id = ? AND is_deleted = FALSE
+        ORDER BY created_at DESC 
+        LIMIT 1`,
       [userId]
     );
 
-    console.log("🔍 Recent conversations for user", userId, ":", recentConversations);
+    console.log(
+      "🔍 Recent conversations for user",
+      userId,
+      ":",
+      recentConversations
+    );
 
     if (recentConversations && recentConversations.length > 0) {
       const recentConversation = recentConversations[0];
@@ -538,24 +628,39 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
       // If no messages, reuse this conversation
       if (messageCount === 0) {
         conversationId = recentConversation.id;
-        console.log("🔄 Reused empty conversation:", conversationId, "for user:", userId);
+        console.log(
+          "🔄 Reused empty conversation:",
+          conversationId,
+          "for user:",
+          userId
+        );
       } else {
         // Create new conversation if recent one has messages
         const newConversationResult = await executeQuery(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-          [userId, 'New Conversation']
+          [userId, "New Conversation"]
         );
         conversationId = newConversationResult.insertId;
-        console.log("🆕 Created new conversation:", conversationId, "for user:", userId);
+        console.log(
+          "🆕 Created new conversation:",
+          conversationId,
+          "for user:",
+          userId
+        );
       }
     } else {
       // No conversations exist, create new one
       const newConversationResult = await executeQuery(
         "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-        [userId, 'New Conversation']
+        [userId, "New Conversation"]
       );
       conversationId = newConversationResult.insertId;
-      console.log("🆕 Created first conversation:", conversationId, "for user:", userId);
+      console.log(
+        "🆕 Created first conversation:",
+        conversationId,
+        "for user:",
+        userId
+      );
     }
   }
 
@@ -574,54 +679,97 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
   let isTTSReady = false;
 
   const initializeTTSSocket = () => {
-    ttsSocket = new WebSocket(
-      "wss://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&sample_rate=24000",
-      {
-        headers: {
-          Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
-        },
+  console.log("🔊 [TTS Init] Initializing TTS WebSocket...");
+  
+  ttsSocket = new WebSocket(
+    "wss://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&sample_rate=24000&container=none",
+    {
+      headers: {
+        Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
+      },
+    }
+  );
+
+  ttsSocket.on("open", () => {
+    console.log("✅ [TTS Socket] Opened successfully");
+    isTTSReady = true;
+    
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "tts-ready",
+        message: "TTS ready for streaming"
+      }));
+      console.log("📤 [TTS Ready] Signal sent to frontend");
+    }
+  });
+
+  // ✅ ULTRA-FAST AUDIO FORWARDING
+// ✅ OPTIMIZED TTS MESSAGE HANDLER - IMMEDIATE FORWARDING
+// ✅ OPTIMIZED TTS MESSAGE HANDLER - IMMEDIATE FORWARDING
+ttsSocket.on("message", (data) => {
+  try {
+    // ✅ CHECK FOR JSON METADATA FIRST
+    if (data.toString().startsWith("{")) {
+      const message = JSON.parse(data.toString());
+
+      if (message.type === "Results") {
+        console.log("📊 [TTS] Metadata received");
+        return;
+      } else if (message.type === "Flushed") {
+        console.log("🔊 [TTS] Flush completed");
+        return;
+      } else if (message.type === "Warning") {
+        console.warn("⚠️ [TTS] Warning received:", message);
+        return; // ✅ DON'T FORWARD WARNINGS AS AUDIO
       }
-    );
+    }
 
-    ttsSocket.on("open", () => {
-      console.log("✅ [TTS] Deepgram TTS WebSocket opened");
-      isTTSReady = true;
-    });
+    // ✅ HANDLE BINARY AUDIO DATA - IMMEDIATE FORWARDING
+    if (Buffer.isBuffer(data) && data.length > 100) { // ✅ MINIMUM SIZE CHECK
+      ttsChunksReceived++;
+      totalTTSBytes += data.length;
 
-    ttsSocket.on("message", (data) => {
-      try {
-        // Check if it's JSON metadata or binary audio
-        const message = JSON.parse(data.toString());
-        
-        if (message.type === "Results") {
-          console.log("📊 [TTS] Metadata received:", message);
-        }
-      } catch (e) {
-        // It's binary audio data - stream to frontend
-        console.log(`🔊 [TTS] Streaming audio chunk: ${data.length} bytes`);
-        
-        // Send audio chunk to frontend
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: "tts-audio-chunk",
-            audio: data.toString('base64'), // Convert to base64 for JSON transport
-            encoding: "linear16",
-            sample_rate: 24000
-          }));
-        }
+      if (!ttsStreamStartTime) {
+        ttsStreamStartTime = Date.now();
+        const streamLatency = ttsStreamStartTime - ttsStartTime;
+        console.log(`🔊 [TTS Stream] First audio received in ${streamLatency}ms`);
       }
-    });
 
-    ttsSocket.on("close", () => {
-      console.log("🔌 [TTS] TTS WebSocket closed");
-      isTTSReady = false;
-    });
+      // ✅ IMMEDIATE FORWARDING TO FRONTEND
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "tts-audio-chunk",
+          audio: data.toString("base64"),
+          encoding: "linear16",
+          sample_rate: 24000,
+          chunk_number: ttsChunksReceived,
+          chunk_size: data.length,
+          timestamp: Date.now() // ✅ ADD TIMESTAMP FOR DEBUGGING
+        }));
 
-    ttsSocket.on("error", (err) => {
-      console.error("❌ [TTS] TTS WebSocket error:", err);
-      isTTSReady = false;
-    });
-  };
+        console.log(`🔊 [TTS] Forwarded chunk #${ttsChunksReceived} (${data.length} bytes)`);
+      }
+    } else if (Buffer.isBuffer(data) && data.length <= 100) {
+      console.log(`🔊 [TTS] Skipping small chunk (${data.length} bytes)`);
+    }
+  } catch (parseError) {
+    console.error("❌ [TTS] Parse error:", parseError.message);
+  }
+});
+
+
+
+  ttsSocket.on("close", (code, reason) => {
+    console.log(`🔌 [TTS Socket] Closed: ${code} - ${reason}`);
+    isTTSReady = false;
+  });
+
+  ttsSocket.on("error", (err) => {
+    console.error("❌ [TTS Socket Error]:", err.message);
+    isTTSReady = false;
+  });
+};
+
 
   // Initialize TTS socket
   initializeTTSSocket();
@@ -633,27 +781,117 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
   let aiTriggerTimeout = null;
   let keepAliveInterval = null;
 
-  const TRIGGER_DELAY = 2500;
+  // ✅ RESET TRANSCRIPT BUFFERS FOR NEW SESSION
+  let liveTranscriptBuffer = "";
+  let lastProcessTime = 0;
+  const LIVE_PROCESS_INTERVAL = 2000;
 
-  function shutdown(reason = 'unknown') {
-    console.log(`🛑 [Cleanup] Shutting down voice for user: ${userId}. Reason: ${reason}`);
+  // ADD THESE PERFORMANCE TRACKING VARIABLES:
+  // ✅ Performance tracking
+  let ttsChunksReceived = 0;
+  let totalTTSBytes = 0;
+  let ttsStreamStartTime = null;
+
+  const TRIGGER_DELAY = 600;
+
+  async function processLiveTranscript(finalText) {
+    if (isGenerating || !finalText) return;
+
+    // ✅ PROPER TIMING CALCULATION
+    const sttTotalTime = sttStartTime ? Date.now() - sttStartTime : 0;
+    console.log(`✅ [Live Processing] ${finalText}`);
+    console.log(`🚀 [STT Complete] Total STT time: ${sttTotalTime}ms`);
+
+    aiStartTime = Date.now(); // ✅ Set AI start time here
+    isGenerating = true;
+
+    // 🚀 Send user message to frontend IMMEDIATELY
+    ws.send(
+      JSON.stringify({
+        type: "user-message",
+        text: finalText,
+        conversation_id: conversationId,
+      })
+    );
+
+    // ✅ Signal TTS start IMMEDIATELY
+    ttsStartTime = Date.now();
+    ws.send(
+      JSON.stringify({
+        type: "tts-start",
+        message: "Starting audio generation...",
+      })
+    );
+
+    ws.send(JSON.stringify({ type: "bot-typing", status: true }));
+    startSendingSilence(deepgramSocket);
+
+    // 🚀 Call enhanced fetchDeepseekAI with streaming TTS
+    const aiResponse = await fetchDeepseekAIWithTTS(
+      finalText,
+      userId,
+      conversationId,
+      ws,
+      ttsSocket,
+      { ttsChunksReceived, totalTTSBytes, ttsStreamStartTime } // Pass TTS metrics
+    );
+
+    const aiTotalTime = Date.now() - aiStartTime;
+    console.log(`🤖 [AI Complete] Total AI processing time: ${aiTotalTime}ms`);
+
+    stopSendingSilence();
+    console.log(`🤖 [DeepSeek] Response completed`);
+
+    ws.send(
+      JSON.stringify({
+        type: "tts-end",
+        message: "Audio generation completed",
+      })
+    );
+
+    transcriptBuffer = "";
+    liveTranscriptBuffer = ""; // ✅ ADD THIS LINE
+    lastProcessTime = 0; // ✅ ADD THIS LINE
+    isGenerating = false;
+    ws.send(JSON.stringify({ type: "bot-typing", status: false }));
+
+    // Reset timing variables
+    sttStartTime = null;
+    aiStartTime = null;
+    ttsStartTime = null;
+    firstAIChunkTime = null;
+    firstTTSChunkTime = null;
+  }
+  function shutdown(reason = "unknown") {
+    console.log(
+      `🛑 [Cleanup] Shutting down voice for user: ${userId}. Reason: ${reason}`
+    );
 
     stopSendingSilence();
     clearInterval(keepAliveInterval);
     clearTimeout(aiTriggerTimeout);
 
-    if (deepgramSocket?.readyState === WebSocket.OPEN || deepgramSocket?.readyState === WebSocket.CONNECTING) {
+    if (
+      deepgramSocket?.readyState === WebSocket.OPEN ||
+      deepgramSocket?.readyState === WebSocket.CONNECTING
+    ) {
       deepgramSocket.terminate();
       console.log("💥 Deepgram STT terminated");
     }
 
     // ✅ Close TTS socket
-    if (ttsSocket?.readyState === WebSocket.OPEN || ttsSocket?.readyState === WebSocket.CONNECTING) {
+    if (
+      ttsSocket?.readyState === WebSocket.OPEN ||
+      ttsSocket?.readyState === WebSocket.CONNECTING
+    ) {
       ttsSocket.terminate();
       console.log("💥 Deepgram TTS terminated");
     }
 
-    if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) {
+    if (
+      ws?.readyState === WebSocket.OPEN ||
+      ws?.readyState === WebSocket.CONNECTING
+    ) {
       ws.close();
       console.log("🔌 Client WebSocket closed");
     }
@@ -681,63 +919,41 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
       const transcript = data.channel?.alternatives?.[0]?.transcript;
 
       if (transcript && transcript.trim() !== "") {
+        if (!sttStartTime) sttStartTime = Date.now();
         console.log(`📝 [Live Transcript] ${transcript}`);
+        console.log(
+          `⏱️ [STT Speed] ${Date.now() - sttStartTime}ms since audio started`
+        );
+
+        // ✅ Build live transcript buffer
+        liveTranscriptBuffer += transcript + " ";
         transcriptBuffer += transcript + " ";
-        
+
         // Send live transcript to frontend
         ws.send(JSON.stringify({ type: "transcript", text: transcript }));
 
+        // ✅ Process live transcript immediately if enough content
+        const currentTime = Date.now();
+        if (
+          !isGenerating &&
+          liveTranscriptBuffer.trim().length > 20 && // Minimum words
+          (currentTime - lastProcessTime > LIVE_PROCESS_INTERVAL ||
+            data.is_final)
+        ) {
+          lastProcessTime = currentTime;
+          processLiveTranscript(liveTranscriptBuffer.trim());
+          liveTranscriptBuffer = ""; // Reset live buffer
+        }
+
+        // ✅ Still handle final transcript for cleanup
         if (data.is_final) {
           if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
-
-          aiTriggerTimeout = setTimeout(async () => {
-            if (isGenerating) return;
-
-            const finalText = transcriptBuffer.trim();
-            if (!finalText) return;
-
-            console.log(`✅ [Final Transcript] ${finalText}`);
-            isGenerating = true;
-
-            // 🚀 Send user message to frontend
-            ws.send(JSON.stringify({
-              type: "user-message",
-              text: finalText,
-              conversation_id: conversationId,
-            }));
-
-            ws.send(JSON.stringify({ type: "bot-typing", status: true }));
-            startSendingSilence(deepgramSocket);
-
-            // ✅ Signal TTS start to frontend
-            ws.send(JSON.stringify({ 
-              type: "tts-start",
-              message: "Starting audio generation..."
-            }));
-
-            // 🚀 Call enhanced fetchDeepseekAI with TTS streaming
-            const aiResponse = await fetchDeepseekAIWithTTS(
-              finalText,
-              userId,
-              conversationId,
-              ws,
-              ttsSocket
-            );
-
-            stopSendingSilence();
-
-            console.log(`🤖 [DeepSeek] Response completed`);
-
-            // ✅ Signal TTS end to frontend
-            ws.send(JSON.stringify({ 
-              type: "tts-end",
-              message: "Audio generation completed"
-            }));
-
-            transcriptBuffer = "";
-            isGenerating = false;
-            ws.send(JSON.stringify({ type: "bot-typing", status: false }));
-          }, TRIGGER_DELAY);
+          // Shorter delay since we're already processing live
+          aiTriggerTimeout = setTimeout(() => {
+            if (!isGenerating && transcriptBuffer.trim()) {
+              processLiveTranscript(transcriptBuffer.trim());
+            }
+          }, 500); // Much shorter delay
         }
       }
     } catch (err) {
@@ -747,12 +963,16 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
 
   deepgramSocket.on("error", (err) => {
     console.error("❌ [STT] Deepgram Error", err);
-    ws.send(JSON.stringify({ type: "error", error: "Deepgram connection error" }));
+    ws.send(
+      JSON.stringify({ type: "error", error: "Deepgram connection error" })
+    );
     shutdown("deepgram error");
   });
 
   deepgramSocket.on("close", (code, reason) => {
-    console.log(`🔌 [STT] Deepgram Connection closed. Code: ${code}, Reason: ${reason}`);
+    console.log(
+      `🔌 [STT] Deepgram Connection closed. Code: ${code}, Reason: ${reason}`
+    );
   });
 
   ws.on("message", (data) => {
@@ -784,6 +1004,7 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
     shutdown("client websocket close");
   });
 };
+// ✅ Add this new function for processing live transcript
 
 // ✅ NEW FUNCTION: Enhanced fetchDeepseekAI with TTS streaming
 const fetchDeepseekAIWithTTS = async (
@@ -791,16 +1012,24 @@ const fetchDeepseekAIWithTTS = async (
   userId,
   conversationId = null,
   ws = null,
-  ttsSocket = null
+  ttsSocket = null,
+  ttsMetrics = null // Add TTS metrics parameter
 ) => {
   try {
-    console.log("🚀 [Voice AI + TTS] Processing message for user:", userId, "conversation:", conversationId);
+    console.log(
+      "🚀 [Voice AI + TTS] Processing message for user:",
+      userId,
+      "conversation:",
+      conversationId
+    );
 
     // ✅ STRICT USER VALIDATION (keep existing validation code)
     if (!userId || isNaN(userId)) {
       console.error("❌ Invalid user_id in fetchDeepseekAI:", userId);
       if (ws) {
-        ws.send(JSON.stringify({ type: "error", error: "Invalid user session" }));
+        ws.send(
+          JSON.stringify({ type: "error", error: "Invalid user session" })
+        );
       }
       return "Authentication error occurred.";
     }
@@ -813,7 +1042,9 @@ const fetchDeepseekAIWithTTS = async (
       );
 
       if (!ownershipCheck || ownershipCheck.length === 0) {
-        console.warn("⚠️ Provided conversation invalid or not owned. Trying fallback...");
+        console.warn(
+          "⚠️ Provided conversation invalid or not owned. Trying fallback..."
+        );
         const latest = await executeQuery(
           `SELECT id FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY updated_at DESC LIMIT 1`,
           [userId]
@@ -821,11 +1052,16 @@ const fetchDeepseekAIWithTTS = async (
 
         if (latest && latest.length > 0) {
           conversationId = latest[0].id;
-          console.log("✅ Fallback to latest active conversation:", conversationId);
+          console.log(
+            "✅ Fallback to latest active conversation:",
+            conversationId
+          );
         } else {
           console.error("❌ No valid conversation found and none provided.");
           if (ws) {
-            ws.send(JSON.stringify({ type: "error", error: "No conversation found." }));
+            ws.send(
+              JSON.stringify({ type: "error", error: "No conversation found." })
+            );
           }
           return "No conversation context is available.";
         }
@@ -833,149 +1069,251 @@ const fetchDeepseekAIWithTTS = async (
     }
 
     // 🧠 GET USER INFO FOR PERSONALIZED RESPONSES (existing code)
-   
 
     // ⚡ Get context immediately (existing code)
-     // ✅ Get context immediately
-    const contextResult = await getConversationContextOptimized(conversationId, userId);
-    const { summaryContext, shouldRename, newConversationName } = contextResult;
+    // ✅ Get context immediately
+    // ✅ PARALLEL PROCESSING: Get context and user info simultaneously
+    const parallelStart = Date.now();
+    const [contextResult, userInfoResult] = await Promise.allSettled([
+      Promise.race([
+        getConversationContextOptimized(conversationId, userId),
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                summaryContext: "",
+                shouldRename: false,
+                newConversationName: null,
+              }),
+            100
+          )
+        ), // ✅ 100ms timeout for context
+      ]),
+      Promise.race([
+        executeQuery("SELECT username FROM users WHERE id = ?", [userId]),
+        new Promise((resolve) => setTimeout(() => resolve([]), 50)), // ✅ 50ms timeout for user info
+      ]),
+    ]);
 
-    // ✅ Get user info
-    let userInfo = null;
-    try {
-      const userResult = await executeQuery(
-        "SELECT username FROM users WHERE id = ?",
-        [userId]
-      );
-      if (userResult && userResult.length > 0) {
-         userInfo = { username: userResult[0].username };
-        console.log("✅ User info loaded:", userInfo.username);
-      }
-    } catch (userError) {
-      console.log("⚠️ Could not fetch user info for personalization:", userError.message);
-    }
+    const { summaryContext, shouldRename, newConversationName } =
+      contextResult.status === "fulfilled"
+        ? contextResult.value
+        : {
+            summaryContext: "",
+            shouldRename: false,
+            newConversationName: null,
+          };
+
+    const userInfo =
+      userInfoResult.status === "fulfilled" && userInfoResult.value?.length > 0
+        ? { username: userInfoResult.value[0].username }
+        : null;
+
+    const parallelTime = Date.now() - parallelStart;
+    console.log(
+      `⚡ [Parallel Processing] Context + User info loaded in ${parallelTime}ms`
+    );
 
     // ✅ Build AI messages
-    const finalMessages = buildAIMessages(summaryContext, userMessage, userInfo);
+    const finalMessages = buildAIMessages(
+      summaryContext,
+      userMessage,
+      userInfo
+    );
+ 
+   // ✅ REPLACE the existing timing variables section with:
+let aiResponse = "";
+const aiStartTime = Date.now();
 
-    // 🚀 START AI RESPONSE STREAM IMMEDIATELY
-    let aiResponse = "";
-    const aiStartTime = Date.now();
+// ✅ FIXED TTS TIMING VARIABLES
+let ttsStreamStartTime = null;
+let firstTTSChunkTime = null;
+let ttsChunksReceived = 0;
+let totalTTSBytes = 0;
+let ttsStartTime = Date.now(); // ✅ ADD THIS LINE
+
 
     try {
       const stream = await deepseek.chat.completions.create({
         model: "deepseek-chat",
         messages: finalMessages,
-        temperature: 0.7,
-        max_tokens: 150,
+        temperature: 0.5, // ✅ Lower for faster, more focused responses
+        max_tokens: 300, // ✅ Shorter for speed
         stream: true,
+        top_p: 0.7, // ✅ Faster token selection
+        frequency_penalty: 0.3, // ✅ Reduce repetition
+        presence_penalty: 0.3, // ✅ Keep responses concise
+        stream_options: { include_usage: false }, // ✅ DISABLE usage stats for speed
       });
 
       // ✅ AUDIO-FIRST APPROACH: Start TTS immediately, delay text
       if (ws) {
-        ws.send(JSON.stringify({
-          type: "start",
-          conversation_id: conversationId,
-          conversation_name: shouldRename ? "Generating title..." : newConversationName,
-          conversation_renamed: shouldRename,
-          context: {
-            conversation_context_available: !!summaryContext,
-          },
-          processing_time: Date.now() - aiStartTime,
-        }));
-
         // ✅ Start TTS immediately
-        ws.send(JSON.stringify({ 
-          type: "tts-start",
-          message: "Starting audio generation..."
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "tts-start",
+            message: "Starting audio generation...",
+          })
+        );
+
+        ws.send(
+          JSON.stringify({
+            type: "start",
+            conversation_id: conversationId,
+            conversation_name: shouldRename
+              ? "Generating title..."
+              : newConversationName,
+            conversation_renamed: shouldRename,
+            context: {
+              conversation_context_available: !!summaryContext,
+            },
+            processing_time: Date.now() - aiStartTime,
+          })
+        );
       }
 
-      console.log(`🚀 Voice AI stream started in ${Date.now() - aiStartTime}ms`);
+      console.log(
+        `🚀 Voice AI stream started in ${Date.now() - aiStartTime}ms`
+      );
 
-      // ✅ IMPROVED: Buffer text for better TTS chunks and delayed text display
-      let textBuffer = "";
+      // ✅ IMPROVED: Buffer text for sentence-based processing only
       let displayBuffer = "";
-      const MIN_TTS_CHUNK_SIZE = 20; // Larger chunks for smoother audio
-      const TEXT_DISPLAY_DELAY = 800; // Delay text display to let audio start first
+      let sentenceBuffer = ""; // ✅ For sentence-based chunking
+      const TEXT_DISPLAY_DELAY = 20;
 
       let textDisplayTimeout = null;
       let isFirstChunk = true;
+      let chunkCount = 0;
+      let ttsChunkCount = 0; // ✅ NEW: Track TTS chunks
 
-      // ✅ Stream the response chunks
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
-        if (content) {
-          aiResponse += content;
-          textBuffer += content;
-          displayBuffer += content;
-          
-          console.log(`🤖 [AI Chunk] ${content}`);
-          
-          // ✅ AUDIO FIRST: Send to TTS immediately with larger chunks
-          if (textBuffer.length >= MIN_TTS_CHUNK_SIZE && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-            ttsSocket.send(JSON.stringify({
-              type: "Speak",
-              text: textBuffer,
-              // ✅ Add natural speech rate
-  model_options: {
-    speed: 0.9, // Slightly slower for more natural speech
-    pitch: 0.0, // Neutral pitch
-    emphasis: 0.1 // Slight emphasis for natural variation
-  }
-            }));
-            console.log(`🔊 [TTS] Sent to TTS: "${textBuffer}"`);
-            textBuffer = ""; // Reset buffer
-          }
+      // ✅ NEW: Start TTS immediately when we have any meaningful content
+      let ttsStarted = false;
+      let firstMeaningfulWord = false;
 
-          // ✅ DELAYED TEXT DISPLAY: Show text after audio has started
-          if (isFirstChunk) {
-            isFirstChunk = false;
-            textDisplayTimeout = setTimeout(() => {
-              startDisplayingText();
-            }, TEXT_DISPLAY_DELAY);
+      // ✅ Stream the response chunks with BATCHED TTS sending
+
+      let wordCount = 0;
+      
+
+   
+
+for await (const chunk of stream) {
+  const content = chunk.choices[0]?.delta?.content || "";
+  if (content) {
+    chunkCount++;
+    
+    if (!firstAIChunkTime) {
+      firstAIChunkTime = Date.now();
+      console.log(`🤖 [AI First Chunk] Generated in ${firstAIChunkTime - aiStartTime}ms`);
+    }
+
+    aiResponse += content;
+    sentenceBuffer += content;
+
+    // ✅ IMMEDIATE SENTENCE DETECTION
+    const shouldSendTTS = detectCompleteSentenceImmediate(sentenceBuffer.trim());
+
+    if (shouldSendTTS && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
+      const cleanText = cleanMarkdownForTTS(sentenceBuffer.trim());
+      
+      if (cleanText.length > 3) {
+        ttsChunkCount++;
+        const ttsStartTime = Date.now();
+        
+        console.log(`🔊 [TTS Send #${ttsChunkCount}] Sending: "${cleanText}"`);
+        
+        try {
+          // ✅ SEND TO TTS IMMEDIATELY
+          ttsSocket.send(JSON.stringify({
+            type: "Speak",
+            text: cleanText,
+            model_options: {
+              speed: 1.6, // ✅ FASTER SPEED
+              pitch: 0.0,
+              emphasis: 0.0,
+            },
+          }));
+          
+          // ✅ IMMEDIATE FLUSH FOR FAST RESPONSE
+          ttsSocket.send(JSON.stringify({ type: "Flush" }));
+          
+          console.log(`🔊 [TTS Flush #${ttsChunkCount}] Flushed in ${Date.now() - ttsStartTime}ms`);
+          
+          if (!firstTTSChunkTime) {
+            firstTTSChunkTime = Date.now();
+            console.log(`🔊 [TTS First] Sent in ${firstTTSChunkTime - ttsStartTime}ms`);
           }
+          
+          sentenceBuffer = ""; // ✅ RESET BUFFER IMMEDIATELY
+        } catch (ttsError) {
+          console.error("❌ [TTS Send Error]:", ttsError.message);
         }
       }
+    }
 
-      // ✅ Send any remaining text to TTS
-      if (textBuffer.length > 0 && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-        ttsSocket.send(JSON.stringify({
-          type: "Speak",
-          text: textBuffer
-        }));
-        console.log(`🔊 [TTS] Sent final chunk to TTS: "${textBuffer}"`);
-      }
+    // ✅ Send text to frontend immediately
+    if (ws) {
+      ws.send(JSON.stringify({
+        type: "content",
+        content: content,
+      }));
+    }
+  }
+}
 
-      // ✅ Send final flush to TTS
-      if (ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-        ttsSocket.send(JSON.stringify({
-           type: "Flush"
-        }));
-        console.log(`🔊 [TTS] Sent flush command to complete audio generation`);
-      }
+// ✅ SEND FINAL SENTENCE IF ANY REMAINS
+if (sentenceBuffer.trim().length > 0 && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
+  const finalText = cleanMarkdownForTTS(sentenceBuffer.trim());
+  if (finalText.length > 3) {
+    ttsChunkCount++;
+    console.log(`🔊 [TTS Final] Sending: "${finalText}"`);
+    
+    try {
+      ttsSocket.send(JSON.stringify({
+        type: "Speak",
+        text: finalText,
+        model_options: {
+          speed: 1.6,
+          pitch: 0.0,
+          emphasis: 0.0,
+        },
+      }));
+      
+      ttsSocket.send(JSON.stringify({ type: "Flush" }));
+      console.log(`🔊 [TTS Final] Flushed final sentence`);
+    } catch (error) {
+      console.error("❌ [TTS Final Error]:", error.message);
+    }
+  }
+}
+
+
 
       // ✅ Function to display text after audio starts
       function startDisplayingText() {
         if (!ws) return;
-        
+
         let displayedLength = 0;
-        const words = displayBuffer.split(' ');
-        
+        const words = displayBuffer.split(" ");
+
         const displayInterval = setInterval(() => {
           if (displayedLength >= words.length) {
             clearInterval(displayInterval);
             return;
           }
-          
+
           // Display 2-3 words at a time for smooth text appearance
-          const wordsToShow = words.slice(0, displayedLength + 2).join(' ');
-          
-          ws.send(JSON.stringify({
-            type: "content",
-            content: words.slice(displayedLength, displayedLength + 2).join(' ') + ' ',
-          }));
-          
+          const wordsToShow = words.slice(0, displayedLength + 2).join(" ");
+
+          ws.send(
+            JSON.stringify({
+              type: "content",
+              content:
+                words.slice(displayedLength, displayedLength + 2).join(" ") +
+                " ",
+            })
+          );
+
           displayedLength += 2;
         }, 200); // Show text every 200ms for smooth appearance
       }
@@ -983,41 +1321,49 @@ const fetchDeepseekAIWithTTS = async (
       console.log(`🤖 [AI Complete Response] ${aiResponse}`);
 
       // ✅ Send final data after a delay to ensure audio is prioritized
-      setTimeout(() => {
-        if (ws) {
-          ws.send(JSON.stringify({
+      // setTimeout(() => {
+      if (ws) {
+        ws.send(
+          JSON.stringify({
             type: "end",
             full_response: aiResponse,
             context: {
               conversation_context_available: !!summaryContext,
             },
             total_processing_time: Date.now() - aiStartTime,
-          }));
+          })
+        );
 
-          // ✅ Signal TTS end
-          setTimeout(() => {
-            ws.send(JSON.stringify({ 
-              type: "tts-end",
-              message: "Audio generation completed"
-            }));
-          }, 1000);
-        }
-      }, 500);
+        // ✅ IMMEDIATE TTS end signal - no setTimeout
+        ws.send(
+          JSON.stringify({
+            type: "tts-end",
+            message: "Audio generation completed",
+          })
+        );
+      }
+      // }, 500);
 
       // 🚀 HANDLE RENAME RESULT (existing code)
       let finalConversationName = newConversationName;
       if (shouldRename) {
         try {
-          const renameResult = await executeRename(conversationId, userMessage, userId);
+          const renameResult = await executeRename(
+            conversationId,
+            userMessage,
+            userId
+          );
           if (renameResult.success) {
             finalConversationName = renameResult.title;
             if (ws) {
-              ws.send(JSON.stringify({
-                type: "conversation_renamed",
-                conversation_id: conversationId,
-                new_name: finalConversationName,
-                success: true,
-              }));
+              ws.send(
+                JSON.stringify({
+                  type: "conversation_renamed",
+                  conversation_id: conversationId,
+                  new_name: finalConversationName,
+                  success: true,
+                })
+              );
             }
           }
         } catch (renameError) {
@@ -1025,270 +1371,185 @@ const fetchDeepseekAIWithTTS = async (
         }
       }
 
-     
+      setImmediate(() => {
+        console.log(`🔄 [Background] Starting parallel background tasks`);
+        const backgroundStartTime = Date.now();
 
-      // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT) - existing code
-      process.nextTick(() => {
-        handleAllBackgroundTasksOptimized(
-          conversationId,
-          userMessage,
-          aiResponse,
-          [],
-          null,
-          [],
-          userId,
-          false,
-          finalConversationName,
-          [],
-          [],
-          ""
-        );
+        // ✅ PARALLEL BACKGROUND PROCESSING
+        const backgroundTasks = [
+          // Database save (highest priority)
+          saveToDatabase(
+            conversationId,
+            userMessage,
+            aiResponse,
+            [],
+            null,
+            [],
+            [],
+            []
+          ),
+
+          // Rename conversation (if needed)
+          shouldRename
+            ? executeRename(conversationId, userMessage, userId)
+            : Promise.resolve(null),
+
+          // Generate summary (lowest priority)
+          generateAndSaveComprehensiveSummary(
+            conversationId,
+            userMessage,
+            aiResponse,
+            ""
+          ),
+        ];
+
+        Promise.allSettled(backgroundTasks)
+          .then((results) => {
+            const backgroundTime = Date.now() - backgroundStartTime;
+            console.log(
+              `✅ [Background] All tasks completed in ${backgroundTime}ms`
+            );
+            console.log(`   Database: ${results[0].status}`);
+            console.log(`   Rename: ${results[1].status}`);
+            console.log(`   Summary: ${results[2].status}`);
+          })
+          .catch((err) => {
+            console.error(`❌ [Background] Failed:`, err);
+          });
       });
 
-      return aiResponse;
+      // REPLACE WITH:
+      // ✅ DETAILED PERFORMANCE LOGGING
+// ✅ FIXED PERFORMANCE LOGGING
+const totalProcessingTime = Date.now() - aiStartTime;
+const sttToAI = aiStartTime && sttStartTime ? aiStartTime - sttStartTime : 0;
+const aiFirstChunkLatency = firstAIChunkTime && aiStartTime ? firstAIChunkTime - aiStartTime : 0;
+const ttsFirstLatency = firstTTSChunkTime && ttsStartTime ? firstTTSChunkTime - ttsStartTime : 0;
+// ✅ FIX THE NEGATIVE TIMING ISSUE
+const ttsFirstAudio = ttsStreamStartTime && ttsStartTime && ttsStreamStartTime > ttsStartTime 
+  ? ttsStreamStartTime - ttsStartTime 
+  : 0;
 
+console.log(`📊 [PERFORMANCE BREAKDOWN]`);
+console.log(`   🎤 STT → AI: ${sttToAI}ms`);
+console.log(`   🤖 AI First Chunk: ${aiFirstChunkLatency}ms`);
+console.log(`   🔊 TTS First Send: ${ttsFirstLatency}ms`);
+console.log(`   🔊 TTS First Audio: ${ttsFirstAudio}ms`);
+console.log(`   ⚡ Total Processing: ${totalProcessingTime}ms`);
+console.log(`   📊 AI Chunks: ${chunkCount} | TTS Sentences: ${ttsChunkCount || 0}`);
+console.log(`   📈 TTS Audio Chunks: ${ttsChunksReceived} (${(totalTTSBytes / 1024).toFixed(1)}KB)`);
+
+if (ttsChunkCount > 0 && ttsFirstAudio > 0) {
+  console.log(`   🚀 Avg TTS Latency: ${Math.round(ttsFirstAudio / ttsChunkCount)}ms per sentence`);
+}
+
+
+// ✅ Add streaming performance metrics
+const streamingEfficiency =
+  firstTTSChunkTime && aiStartTime
+    ? ((firstTTSChunkTime - aiStartTime) / 1000).toFixed(2)
+    : "N/A";
+console.log(
+  `   🚀 End-to-End Latency: ${streamingEfficiency}s (AI start → First audio)`
+);
+
+      // ✅ ADD THE TTS STREAMING SUMMARY RIGHT HERE:
+      // ✅ TTS Streaming Performance Summary
+      if (ttsMetrics && ttsMetrics.ttsChunksReceived > 0) {
+        const { ttsChunksReceived, totalTTSBytes, ttsStreamStartTime } =
+          ttsMetrics;
+        const avgTTSChunkSize = Math.round(totalTTSBytes / ttsChunksReceived);
+        const ttsStreamDuration = ttsStreamStartTime
+          ? ((Date.now() - ttsStreamStartTime) / 1000).toFixed(2)
+          : "N/A";
+
+        console.log(`🔊 [TTS STREAMING SUMMARY]`);
+        console.log(`   📦 Audio Chunks: ${ttsChunksReceived}`);
+        console.log(
+          `   📊 Total Audio: ${(totalTTSBytes / 1024).toFixed(1)}KB`
+        );
+        console.log(`   📈 Avg Chunk Size: ${avgTTSChunkSize} bytes`);
+        console.log(`   ⏱️ Stream Duration: ${ttsStreamDuration}s`);
+        console.log(
+          `   🚀 Streaming Rate: ${
+            ttsChunksReceived > 0
+              ? Math.round(ttsChunksReceived / parseFloat(ttsStreamDuration))
+              : 0
+          } chunks/sec`
+        );
+      }
+
+      return aiResponse;
     } catch (aiError) {
       console.error("❌ Voice AI API error:", aiError);
       if (ws) {
-        ws.send(JSON.stringify({
-          type: "error",
-          error: "I'm having trouble processing your request. Please try again.",
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            error:
+              "I'm having trouble processing your request. Please try again.",
+          })
+        );
       }
       return "I'm having trouble processing your request. Please try again.";
     }
-
   } catch (error) {
     console.error("❌ fetchDeepseekAIWithTTS error:", error.message);
     if (ws) {
-      ws.send(JSON.stringify({
-        type: "error",
-        error: "Internal server error occurred.",
-      }));
-    }
-    return "An error occurred while processing your request.";
-  }
-};
-
-const fetchDeepseekAI = async (
-  userMessage,
-  userId,
-  conversationId = null,
-  ws = null
-) => {
-  try {
-    console.log("🚀 [Voice AI] Processing message for user:", userId, "conversation:", conversationId);
-
-    // ✅ STRICT USER VALIDATION (like askChatbot)
-    if (!userId || isNaN(userId)) {
-      console.error("❌ Invalid user_id in fetchDeepseekAI:", userId);
-      if (ws) {
-        ws.send(JSON.stringify({ type: "error", error: "Invalid user session" }));
-      }
-      return "Authentication error occurred.";
-    }
-
-    // ✅ VERIFY CONVERSATION OWNERSHIP IF PROVIDED (like askChatbot)
-    if (conversationId && !isNaN(conversationId)) {
-      const ownershipCheck = await executeQuery(
-        "SELECT id FROM conversations WHERE id = ? AND user_id = ? AND is_deleted = FALSE",
-        [conversationId, userId]
-      );
-
-      if (!ownershipCheck || ownershipCheck.length === 0) {
-        console.warn("⚠️ Provided conversation invalid or not owned. Trying fallback...");
-        // Try fallback
-        const latest = await executeQuery(
-          `SELECT id FROM conversations WHERE user_id = ? AND is_deleted = FALSE ORDER BY updated_at DESC LIMIT 1`,
-          [userId]
-        );
-
-        if (latest && latest.length > 0) {
-          conversationId = latest[0].id;
-          console.log("✅ Fallback to latest active conversation:", conversationId);
-        } else {
-          console.error("❌ No valid conversation found and none provided.");
-          if (ws) {
-            ws.send(JSON.stringify({ type: "error", error: "No conversation found." }));
-          }
-          return "No conversation context is available.";
-        }
-      }
-    }
-
-    // 🧠 GET USER INFO FOR PERSONALIZED RESPONSES (like askChatbot)
-    let userInfo = null;
-    try {
-      const userResult = await executeQuery(
-        "SELECT username FROM users WHERE id = ?",
-        [userId]
-      );
-      if (userResult && userResult.length > 0) {
-         userInfo = { username: userResult[0].username };
-        console.log("✅ User info loaded:", userInfo.username);
-      }
-    } catch (userError) {
-      console.log("⚠️ Could not fetch user info for personalization:", userError.message);
-    }
-
-    // ⚡ Get context immediately (like askChatbot)
-     // ✅ Get context immediately
-    const contextResult = await getConversationContextOptimized(conversationId, userId);
-    const { summaryContext, shouldRename, newConversationName } = contextResult;
-
-    // ✅ Build AI messages
-    const finalMessages = buildAIMessages(summaryContext, userMessage, userInfo);
-
-    // 🚀 START AI RESPONSE STREAM IMMEDIATELY
-    let aiResponse = "";
-    const aiStartTime = Date.now();
-
-    try {
-      const stream = await deepseek.chat.completions.create({
-        model: "deepseek-chat",
-        messages: finalMessages,
-        temperature: 0.7,
-        max_tokens: 150,
-        stream: true,
-      });
-
-      // Send initial metadata immediately
-      if (ws) {
-        ws.send(JSON.stringify({
-          type: "start",
-          conversation_id: conversationId,
-          conversation_name: shouldRename ? "Generating title..." : newConversationName,
-          conversation_renamed: shouldRename,
-          context: {
-            conversation_context_available: !!summaryContext,
-          },
-          processing_time: Date.now() - aiStartTime,
-        }));
-
-        // ✅ IMMEDIATELY start TTS - don't wait
-        ws.send(JSON.stringify({ 
-          type: "tts-start",
-          message: "Starting audio generation..."
-        }));
-      }
-
-      console.log(`🚀 Voice AI stream started in ${Date.now() - aiStartTime}ms`);
-
-      // ✅ CRITICAL FIX: Accumulate text in chunks before sending to TTS
-      let textBuffer = "";
-      const MIN_CHUNK_SIZE = 10; // Send to TTS every 10 characters
-
-      // ✅ Stream the response chunks AND send to TTS in real-time
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
-        if (content) {
-          aiResponse += content;
-          textBuffer += content;
-          
-          console.log(`🤖 [AI Chunk] ${content}`);
-          
-          // Send text chunk to frontend immediately
-          if (ws) {
-            ws.send(JSON.stringify({
-              type: "content",
-              content: content,
-            }));
-          }
-
-          // ✅ REAL-TIME TTS: Send accumulated text to TTS when we have enough
-          if (textBuffer.length >= MIN_CHUNK_SIZE && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-            ttsSocket.send(JSON.stringify({
-              type: "Speak",
-              text: textBuffer,
-              
-            }));
-            console.log(`🔊 [TTS] Sent to TTS: "${textBuffer}"`);
-            textBuffer = ""; // Reset buffer
-          }
-        }
-      }
-
-      // ✅ Send any remaining text to TTS
-      if (textBuffer.length > 0 && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-        ttsSocket.send(JSON.stringify({
-          type: "Speak",
-          text: textBuffer
-        }));
-        console.log(`🔊 [TTS] Sent final chunk to TTS: "${textBuffer}"`);
-      }
-
-      // ✅ Send final flush to TTS to ensure all audio is generated
-      if (ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-        ttsSocket.send(JSON.stringify({
-           type: "Flush"
-        }));
-        console.log(`🔊 [TTS] Sent flush command to complete audio generation`);
-      }
-
-      console.log(`🤖 [AI Complete Response] ${aiResponse}`);
-
-      // Send final data
-      if (ws) {
-        ws.send(JSON.stringify({
-          type: "end",
-          full_response: aiResponse,
-          context: {
-            conversation_context_available: !!summaryContext,
-          },
-          total_processing_time: Date.now() - aiStartTime,
-        }));
-
-        // ✅ Signal TTS end after a small delay to ensure all audio is processed
-        setTimeout(() => {
-          ws.send(JSON.stringify({ 
-            type: "tts-end",
-            message: "Audio generation completed"
-          }));
-        }, 500);
-      }
-
-      // 🔄 BACKGROUND PROCESSING (AFTER RESPONSE SENT) - like askChatbot
-      process.nextTick(() => {
-        handleAllBackgroundTasksOptimized(
-          conversationId,
-          userMessage,
-          aiResponse,
-          [],
-          null,
-          [],
-          userId,
-          false,
-          finalConversationName,
-          [],
-          [],
-          ""
-        );
-      });
-
-      return aiResponse;
-
-    } catch (aiError) {
-      console.error("❌ Voice AI API error:", aiError);
-      if (ws) {
-        ws.send(JSON.stringify({
+      ws.send(
+        JSON.stringify({
           type: "error",
-          error: "I'm having trouble processing your request. Please try again.",
-        }));
-      }
-      return "I'm having trouble processing your request. Please try again.";
-    }
-
-  } catch (error) {
-    console.error("❌ fetchDeepseekAI error:", error.message);
-    if (ws) {
-      ws.send(JSON.stringify({
-        type: "error",
-        error: "Internal server error occurred.",
-      }));
+          error: "Internal server error occurred.",
+        })
+      );
     }
     return "An error occurred while processing your request.";
   }
 };
+
+// ✅ IMMEDIATE SENTENCE DETECTION for instant TTS
+// ✅ IMMEDIATE SENTENCE DETECTION for instant TTS
+function detectCompleteSentenceImmediate(text) {
+  if (!text || text.length < 4) return false;
+  
+  const words = text.trim().split(/\s+/);
+  const wordCount = words.length;
+  
+  // ✅ IMMEDIATE SENTENCE ENDINGS
+  if (/[.!?]+(\s|$)/.test(text)) {
+    return true;
+  }
+  
+  // ✅ NATURAL PAUSES (5+ words)
+  if (wordCount >= 5 && /,\s+(and|but|or|so|yet|because|since|although|while|when|if)\s+\w+/i.test(text)) {
+    return true;
+  }
+  
+  // ✅ EMERGENCY BREAK (15+ words)
+  if (wordCount >= 15) {
+    return true;
+  }
+  
+  return false;
+}
+
+// ✅ CLEAN MARKDOWN FOR TTS - Remove formatting for natural speech
+function cleanMarkdownForTTS(text) {
+  if (!text) return "";
+  
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold **text**
+    .replace(/\*(.*?)\*/g, '$1')     // Remove italic *text*
+    .replace(/`(.*?)`/g, '$1')       // Remove code `text`
+    .replace(/\[(.*?)\]\(.*?\)/g, '$1') // Remove links [text](url)
+    .replace(/#{1,6}\s*/g, '')       // Remove headers
+    .replace(/^\s*[-*+]\s*/gm, '')   // Remove list markers
+    .replace(/^\s*\d+\.\s*/gm, '')   // Remove numbered lists
+    .replace(/\s+/g, ' ')            // Normalize whitespace
+    .trim();
+}
+
+
 
 // 🏷️ EXECUTE RENAME WITH USER VALIDATION AND AI TITLE GENERATION (from chatController)
 async function executeRename(conversation_id, userMessage, user_id) {
@@ -1301,7 +1562,10 @@ async function executeRename(conversation_id, userMessage, user_id) {
       [aiGeneratedTitle, conversation_id, user_id]
     );
 
-    console.log(`🏷️ Conversation renamed to: "${aiGeneratedTitle}" for user:`, user_id);
+    console.log(
+      `🏷️ Conversation renamed to: "${aiGeneratedTitle}" for user:`,
+      user_id
+    );
     return { success: true, title: aiGeneratedTitle };
   } catch (error) {
     console.error("❌ Rename execution error:", error);
@@ -1321,7 +1585,8 @@ async function generateConversationTitle(userMessage) {
       messages: [
         {
           role: "system",
-          content: "Generate a short, descriptive title (3-6 words) for a conversation based on the user's first message. Reply with only the title, no quotes or extra text.",
+          content:
+            "Generate a short, descriptive title (3-6 words) for a conversation based on the user's first message. Reply with only the title, no quotes or extra text.",
         },
         {
           role: "user",
@@ -1368,7 +1633,12 @@ async function handleAllBackgroundTasksOptimized(
   urlContent = ""
 ) {
   try {
-    console.log("🔄 Starting optimized background tasks for conversation:", conversation_id, "user:", user_id);
+    console.log(
+      "🔄 Starting optimized background tasks for conversation:",
+      conversation_id,
+      "user:",
+      user_id
+    );
 
     // ✅ USER VALIDATION IN BACKGROUND TASKS
     if (!user_id || isNaN(user_id)) {
@@ -1381,11 +1651,21 @@ async function handleAllBackgroundTasksOptimized(
       try {
         const conversationResult = await executeQuery(
           "INSERT INTO conversations (user_id, name) VALUES (?, ?)",
-          [user_id, newConversationName || userMessage?.substring(0, 20) || "Voice Chat"]
+          [
+            user_id,
+            newConversationName ||
+              userMessage?.substring(0, 20) ||
+              "Voice Chat",
+          ]
         );
 
         conversation_id = conversationResult.insertId;
-        console.log("✅ Created new conversation:", conversation_id, "for user:", user_id);
+        console.log(
+          "✅ Created new conversation:",
+          conversation_id,
+          "for user:",
+          user_id
+        );
       } catch (convError) {
         console.error("❌ Conversation creation failed:", convError);
         return;
@@ -1396,33 +1676,63 @@ async function handleAllBackgroundTasksOptimized(
     const backgroundTasks = [
       // Save to database
       Promise.race([
-        saveToDatabase(conversation_id, userMessage, aiResponse, uploadedFiles, extracted_summary, suggestions, processedUrls, urlData),
-        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 5000))
+        saveToDatabase(
+          conversation_id,
+          userMessage,
+          aiResponse,
+          uploadedFiles,
+          extracted_summary,
+          suggestions,
+          processedUrls,
+          urlData
+        ),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ timeout: true }), 5000)
+        ),
       ]),
 
       // Rename conversation ONLY if needed
       shouldRename
         ? Promise.race([
             executeRename(conversation_id, userMessage, user_id),
-            new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 3000))
+            new Promise((resolve) =>
+              setTimeout(() => resolve({ timeout: true }), 3000)
+            ),
           ])
         : Promise.resolve(false),
 
       // Generate comprehensive summary
       Promise.race([
-        generateAndSaveComprehensiveSummary(conversation_id, userMessage, aiResponse, urlContent),
-        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 8000))
+        generateAndSaveComprehensiveSummary(
+          conversation_id,
+          userMessage,
+          aiResponse,
+          urlContent
+        ),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ timeout: true }), 8000)
+        ),
       ]),
     ];
 
-    const [dbResult, renameResult, summaryResult] = await Promise.allSettled(backgroundTasks);
+    const [dbResult, renameResult, summaryResult] = await Promise.allSettled(
+      backgroundTasks
+    );
 
     console.log("✅ Optimized background tasks completed:", {
-      database: dbResult.status === "fulfilled" && !dbResult.value?.timeout ? "✅ Saved" : "❌ Failed/Timeout",
+      database:
+        dbResult.status === "fulfilled" && !dbResult.value?.timeout
+          ? "✅ Saved"
+          : "❌ Failed/Timeout",
       rename: shouldRename
-        ? renameResult.status === "fulfilled" && !renameResult.value?.timeout ? "✅ Done" : "❌ Failed/Timeout"
+        ? renameResult.status === "fulfilled" && !renameResult.value?.timeout
+          ? "✅ Done"
+          : "❌ Failed/Timeout"
         : "⏭️ Skipped",
-      summary: summaryResult.status === "fulfilled" && !summaryResult.value?.timeout ? "✅ Generated" : "❌ Failed/Timeout",
+      summary:
+        summaryResult.status === "fulfilled" && !summaryResult.value?.timeout
+          ? "✅ Generated"
+          : "❌ Failed/Timeout",
       conversation_id: conversation_id,
       user_id: user_id,
     });
@@ -1453,32 +1763,35 @@ async function saveToDatabase(
       .join(",");
 
     // Prepare URL data for database
-    const urlsString = processedUrls.length > 0 ? processedUrls.join(",") : null;
+    const urlsString =
+      processedUrls.length > 0 ? processedUrls.join(",") : null;
 
-    const urlContentString = urlData.length > 0
-      ? urlData
-          .filter((data) => data && data.content && !data.error)
-          .map((data) => `[${data.title || 'Untitled'}] ${data.content}`)
-          .join("\n---\n")
-      : null;
+    const urlContentString =
+      urlData.length > 0
+        ? urlData
+            .filter((data) => data && data.content && !data.error)
+            .map((data) => `[${data.title || "Untitled"}] ${data.content}`)
+            .join("\n---\n")
+        : null;
 
-    const urlMetadata = urlData.length > 0
-      ? JSON.stringify(
-          urlData.map((data) => ({
-            url: data?.url || '',
-            title: data?.title || 'Untitled',
-            description: data?.description || '',
-            success: !data?.error,
-            error: data?.error || null,
-            metadata: data?.metadata || null,
-          }))
-        )
-      : null;
+    const urlMetadata =
+      urlData.length > 0
+        ? JSON.stringify(
+            urlData.map((data) => ({
+              url: data?.url || "",
+              title: data?.title || "Untitled",
+              description: data?.description || "",
+              success: !data?.error,
+              error: data?.error || null,
+              metadata: data?.metadata || null,
+            }))
+          )
+        : null;
 
     await executeQuery(
       `INSERT INTO chat_history 
-       (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, suggestions, urls, url_content, url_metadata) 
-       VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)`,
+        (conversation_id, user_message, response, created_at, file_path, extracted_text, file_names, suggestions, urls, url_content, url_metadata) 
+        VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)`,
       [
         conversation_id,
         userMessage,
@@ -1493,7 +1806,10 @@ async function saveToDatabase(
       ]
     );
 
-    console.log("✅ Database save successful for conversation:", conversation_id);
+    console.log(
+      "✅ Database save successful for conversation:",
+      conversation_id
+    );
     return true;
   } catch (error) {
     console.error("❌ Database save error:", error);
@@ -1538,11 +1854,17 @@ async function generateAndSaveComprehensiveSummary(
         let userContent = chat.user_message;
 
         if (chat.url_content) {
-          userContent += `\n[URL Context: ${chat.url_content.substring(0, 1000)}]`;
+          userContent += `\n[URL Context: ${chat.url_content.substring(
+            0,
+            1000
+          )}]`;
         }
 
         if (chat.extracted_text) {
-          userContent += `\n[Document Context: ${chat.extracted_text.substring(0, 500)}]`;
+          userContent += `\n[Document Context: ${chat.extracted_text.substring(
+            0,
+            500
+          )}]`;
         }
 
         completeConversation.push({ role: "user", content: userContent });
@@ -1559,7 +1881,10 @@ async function generateAndSaveComprehensiveSummary(
     // Add current exchange
     let currentUserContent = currentUserMessage;
     if (urlContent) {
-      currentUserContent += `\n[Current URL Context: ${urlContent.substring(0, 1000)}]`;
+      currentUserContent += `\n[Current URL Context: ${urlContent.substring(
+        0,
+        1000
+      )}]`;
     }
 
     completeConversation.push({ role: "user", content: currentUserContent });
@@ -1568,7 +1893,9 @@ async function generateAndSaveComprehensiveSummary(
       content: currentAiResponse,
     });
 
-    console.log(`📊 Creating summary for ${completeConversation.length} messages`);
+    console.log(
+      `📊 Creating summary for ${completeConversation.length} messages`
+    );
 
     // Create comprehensive summary
     const conversationText = completeConversation
@@ -1576,30 +1903,32 @@ async function generateAndSaveComprehensiveSummary(
       .join("\n");
 
     const summaryPrompt = [
-  {
-    role: "system",
-    content: `Create a concise summary of this voice conversation for future context. Focus on:
+      {
+        role: "system",
+        content: `Create a concise summary of this voice conversation for future context. Focus on:
 
-1. Main topics discussed
-2. User's key questions and needs
-3. Important context for future voice interactions
-4. User's communication preferences
+  1. Main topics discussed
+  2. User's key questions and needs
+  3. Important context for future voice interactions
+  4. User's communication preferences
 
-Keep it brief but informative (100-200 words max) since this is for voice mode context.`,
-  },
-  {
-    role: "user",
-    content: `Voice conversation to summarize:\n${conversationText.substring(0, 8000)}`, // Reduced from 12000
-  },
-];
+  Keep it brief but informative (100-200 words max) since this is for voice mode context.`,
+      },
+      {
+        role: "user",
+        content: `Voice conversation to summarize:\n${conversationText.substring(
+          0,
+          8000
+        )}`, // Reduced from 12000
+      },
+    ];
 
-const summaryResult = await deepseek.chat.completions.create({
-  model: "deepseek-chat",
-  messages: summaryPrompt,
-  temperature: 0.2,
-  max_tokens: 300, // Reduced from 500 for more concise summaries
-});
-
+    const summaryResult = await deepseek.chat.completions.create({
+      model: "deepseek-chat",
+      messages: summaryPrompt,
+      temperature: 0.2,
+      max_tokens: 300, // Reduced from 500 for more concise summaries
+    });
 
     const summary = summaryResult.choices?.[0]?.message?.content || "";
 
@@ -1626,9 +1955,14 @@ const summaryResult = await deepseek.chat.completions.create({
 
     // Fallback: Create a basic summary
     try {
-      const basicSummary = `User discussed: ${currentUserMessage.substring(0, 200)}${
+      const basicSummary = `User discussed: ${currentUserMessage.substring(
+        0,
+        200
+      )}${
         currentUserMessage.length > 200 ? "..." : ""
-      }. AI provided assistance with this topic.${urlContent ? " URLs were referenced in the conversation." : ""}`;
+      }. AI provided assistance with this topic.${
+        urlContent ? " URLs were referenced in the conversation." : ""
+      }`;
 
       await executeQuery(
         "UPDATE chat_history SET summarized_chat = ? WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -1647,8 +1981,7 @@ const summaryResult = await deepseek.chat.completions.create({
 module.exports = {
   handleFinalUpload,
   handleLiveVoiceMessage,
-  fetchDeepseekAI,
+
   fetchDeepseekAIWithTTS,
   handleDictateMode,
 };
-
