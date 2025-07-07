@@ -465,7 +465,7 @@ VOICE MODE GUIDELINES:
 - Provide ACCURATE and COMPLETE answers to user questions
 - Be conversational but thorough - don't sacrifice accuracy for brevity
 - For simple questions: Keep responses concise (2-3 sentences)
-- For complex questions: Provide detailed explanations (up to 4-5 sentences if needed)
+- For complex questions: Provide detailed explanations (up to 3-4 sentences if needed)
 - Always prioritize correctness over speed
 - If you need to explain something technical, break it down clearly
 - Use a warm, helpful tone but ensure information is comprehensive
@@ -682,7 +682,7 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
   console.log("🔊 [TTS Init] Initializing TTS WebSocket...");
   
   ttsSocket = new WebSocket(
-    "wss://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&sample_rate=24000&container=none",
+    "wss://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&sample_rate=24000&container=none&buffer_size=250",
     {
       headers: {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
@@ -715,12 +715,18 @@ ttsSocket.on("message", (data) => {
       if (message.type === "Results") {
         console.log("📊 [TTS] Metadata received");
         return;
-      } else if (message.type === "Flushed") {
-        console.log("🔊 [TTS] Flush completed");
+     } else if (message.type === "Flushed") {
+        console.log("🔊 [TTS] Flush completed - Ready for new input");
+        // ✅ RESUME STT WHEN TTS FLUSH COMPLETES
+        if (sttPaused && !isGenerating) {
+          setTimeout(() => {
+            resumeSTT();
+          }, 500); // Small delay to ensure audio starts playing
+        }
         return;
       } else if (message.type === "Warning") {
         console.warn("⚠️ [TTS] Warning received:", message);
-        return; // ✅ DON'T FORWARD WARNINGS AS AUDIO
+        return;
       }
     }
 
@@ -794,16 +800,43 @@ ttsSocket.on("message", (data) => {
 
   const TRIGGER_DELAY = 600;
 
-  async function processLiveTranscript(finalText) {
+  // ✅ ADD THESE STT CONTROL FUNCTIONS HERE
+  let sttPaused = false; // ✅ ADD THIS FLAG
+
+  function pauseSTT() {
+    console.log("⏸️ [STT] Pausing speech recognition");
+    sttPaused = true; // ✅ SET PAUSE FLAG
+    // Stop processing new audio while AI responds
+    if (deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
+      // Send silence to maintain connection but ignore responses
+      startSendingSilence(deepgramSocket);
+    }
+  }
+
+  function resumeSTT() {
+    console.log("▶️ [STT] Resuming speech recognition");
+    sttPaused = false; // ✅ CLEAR PAUSE FLAG
+    stopSendingSilence();
+    // Reset transcript buffer for new user input
+    transcriptBuffer = "";
+    sttStartTime = null;
+  }
+
+
+  // ✅ REPLACE the existing processLiveTranscript function with this
+  async function processCompleteTranscript(finalText) {
     if (isGenerating || !finalText) return;
 
     // ✅ PROPER TIMING CALCULATION
     const sttTotalTime = sttStartTime ? Date.now() - sttStartTime : 0;
-    console.log(`✅ [Live Processing] ${finalText}`);
+    console.log(`✅ [Processing Complete Message] ${finalText}`);
     console.log(`🚀 [STT Complete] Total STT time: ${sttTotalTime}ms`);
 
-    aiStartTime = Date.now(); // ✅ Set AI start time here
+    aiStartTime = Date.now();
     isGenerating = true;
+
+    // ✅ PAUSE STT IMMEDIATELY
+    pauseSTT();
 
     // 🚀 Send user message to frontend IMMEDIATELY
     ws.send(
@@ -824,7 +857,6 @@ ttsSocket.on("message", (data) => {
     );
 
     ws.send(JSON.stringify({ type: "bot-typing", status: true }));
-    startSendingSilence(deepgramSocket);
 
     // 🚀 Call enhanced fetchDeepseekAI with streaming TTS
     const aiResponse = await fetchDeepseekAIWithTTS(
@@ -833,13 +865,12 @@ ttsSocket.on("message", (data) => {
       conversationId,
       ws,
       ttsSocket,
-      { ttsChunksReceived, totalTTSBytes, ttsStreamStartTime } // Pass TTS metrics
+      { ttsChunksReceived, totalTTSBytes, ttsStreamStartTime }
     );
 
     const aiTotalTime = Date.now() - aiStartTime;
     console.log(`🤖 [AI Complete] Total AI processing time: ${aiTotalTime}ms`);
 
-    stopSendingSilence();
     console.log(`🤖 [DeepSeek] Response completed`);
 
     ws.send(
@@ -849,19 +880,24 @@ ttsSocket.on("message", (data) => {
       })
     );
 
-    transcriptBuffer = "";
-    liveTranscriptBuffer = ""; // ✅ ADD THIS LINE
-    lastProcessTime = 0; // ✅ ADD THIS LINE
-    isGenerating = false;
-    ws.send(JSON.stringify({ type: "bot-typing", status: false }));
+    // ✅ RESUME STT AFTER AI COMPLETES
+    setTimeout(() => {
+      transcriptBuffer = "";
+      liveTranscriptBuffer = "";
+      lastProcessTime = 0;
+      isGenerating = false;
+      resumeSTT();
+      ws.send(JSON.stringify({ type: "bot-typing", status: false }));
 
-    // Reset timing variables
-    sttStartTime = null;
-    aiStartTime = null;
-    ttsStartTime = null;
-    firstAIChunkTime = null;
-    firstTTSChunkTime = null;
+      // Reset timing variables
+      sttStartTime = null;
+      aiStartTime = null;
+      ttsStartTime = null;
+      firstAIChunkTime = null;
+      firstTTSChunkTime = null;
+    }, 1000); // Small delay to ensure TTS starts playing
   }
+
   function shutdown(reason = "unknown") {
     console.log(
       `🛑 [Cleanup] Shutting down voice for user: ${userId}. Reason: ${reason}`
@@ -913,53 +949,62 @@ ttsSocket.on("message", (data) => {
     }
   });
 
-  deepgramSocket.on("message", (msg) => {
+   deepgramSocket.on("message", (msg) => {
     try {
+      // ✅ IGNORE ALL STT MESSAGES WHEN PAUSED
+      if (sttPaused || isGenerating) {
+        console.log("🔇 [STT] Ignoring transcript - AI is responding");
+        return;
+      }
+
       const data = JSON.parse(msg.toString());
       const transcript = data.channel?.alternatives?.[0]?.transcript;
 
       if (transcript && transcript.trim() !== "") {
         if (!sttStartTime) sttStartTime = Date.now();
         console.log(`📝 [Live Transcript] ${transcript}`);
-        console.log(
-          `⏱️ [STT Speed] ${Date.now() - sttStartTime}ms since audio started`
-        );
-
-        // ✅ Build live transcript buffer
-        liveTranscriptBuffer += transcript + " ";
+        
+        // ✅ Build transcript buffer
         transcriptBuffer += transcript + " ";
-
-        // Send live transcript to frontend
+        
+        // Send live transcript to frontend for display
         ws.send(JSON.stringify({ type: "transcript", text: transcript }));
 
-        // ✅ Process live transcript immediately if enough content
-        const currentTime = Date.now();
-        if (
-          !isGenerating &&
-          liveTranscriptBuffer.trim().length > 20 && // Minimum words
-          (currentTime - lastProcessTime > LIVE_PROCESS_INTERVAL ||
-            data.is_final)
-        ) {
-          lastProcessTime = currentTime;
-          processLiveTranscript(liveTranscriptBuffer.trim());
-          liveTranscriptBuffer = ""; // Reset live buffer
-        }
-
-        // ✅ Still handle final transcript for cleanup
+        // ✅ ONLY process on is_final OR after silence timeout
         if (data.is_final) {
+          console.log(`✅ [Final Transcript] ${transcriptBuffer.trim()}`);
+          
+          // Clear any existing timeout
           if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
-          // Shorter delay since we're already processing live
+          
+          // Set timeout to wait for more speech (2 seconds of silence)
           aiTriggerTimeout = setTimeout(() => {
-            if (!isGenerating && transcriptBuffer.trim()) {
-              processLiveTranscript(transcriptBuffer.trim());
+            if (!isGenerating && !sttPaused && transcriptBuffer.trim()) {
+              processCompleteTranscript(transcriptBuffer.trim());
             }
-          }, 500); // Much shorter delay
+          }, 2000); // Wait 2 seconds after final transcript
+        }
+      }
+
+      // ✅ Handle VAD (Voice Activity Detection) events
+      if (data.type === "Results" && data.channel?.alternatives?.[0]?.transcript === "") {
+        // This indicates silence/pause
+        if (transcriptBuffer.trim() && !isGenerating && !sttPaused) {
+          if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
+          
+          // Shorter timeout for silence detection
+          aiTriggerTimeout = setTimeout(() => {
+            if (!isGenerating && !sttPaused && transcriptBuffer.trim()) {
+              processCompleteTranscript(transcriptBuffer.trim());
+            }
+          }, 1500); // 1.5 seconds of silence triggers processing
         }
       }
     } catch (err) {
       console.error("❌ [Parse Error]", err);
     }
   });
+
 
   deepgramSocket.on("error", (err) => {
     console.error("❌ [STT] Deepgram Error", err);
@@ -975,7 +1020,7 @@ ttsSocket.on("message", (data) => {
     );
   });
 
-  ws.on("message", (data) => {
+    ws.on("message", (data) => {
     try {
       if (!Buffer.isBuffer(data)) {
         const parsed = JSON.parse(data.toString());
@@ -984,20 +1029,29 @@ ttsSocket.on("message", (data) => {
           shutdown("stop-voice from client");
           return;
         }
+        // ✅ ADD MANUAL TRIGGER FOR PROCESSING
+        if (parsed.type === "force-process" && transcriptBuffer.trim()) {
+          if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
+          processCompleteTranscript(transcriptBuffer.trim());
+          return;
+        }
       }
     } catch (err) {
       console.error("❌ [Voice] Error handling message", err);
     }
 
-    if (Buffer.isBuffer(data)) {
-      if (isGenerating) return;
+    // ✅ ONLY PROCESS AUDIO IF NOT GENERATING AND NOT PAUSED
+    if (Buffer.isBuffer(data) && !isGenerating && !sttPaused) {
       if (isDGReady && deepgramSocket.readyState === WebSocket.OPEN) {
         deepgramSocket.send(data);
       } else {
         audioQueue.push(data);
       }
+    } else if (Buffer.isBuffer(data) && (isGenerating || sttPaused)) {
+      console.log("🔇 [Audio] Dropping audio chunk - AI is responding");
     }
   });
+
 
   ws.on("close", () => {
     console.log(`🔌 [Voice] Client WebSocket closed`);
@@ -1073,7 +1127,7 @@ const fetchDeepseekAIWithTTS = async (
     // ⚡ Get context immediately (existing code)
     // ✅ Get context immediately
     // ✅ PARALLEL PROCESSING: Get context and user info simultaneously
-    const parallelStart = Date.now();
+      const parallelStart = Date.now();
     const [contextResult, userInfoResult] = await Promise.allSettled([
       Promise.race([
         getConversationContextOptimized(conversationId, userId),
@@ -1085,13 +1139,13 @@ const fetchDeepseekAIWithTTS = async (
                 shouldRename: false,
                 newConversationName: null,
               }),
-            100
+            50 // ✅ REDUCED from 100ms to 50ms
           )
-        ), // ✅ 100ms timeout for context
+        ),
       ]),
       Promise.race([
         executeQuery("SELECT username FROM users WHERE id = ?", [userId]),
-        new Promise((resolve) => setTimeout(() => resolve([]), 50)), // ✅ 50ms timeout for user info
+        new Promise((resolve) => setTimeout(() => resolve([]), 25)), // ✅ REDUCED from 50ms to 25ms
       ]),
     ]);
 
@@ -1103,6 +1157,14 @@ const fetchDeepseekAIWithTTS = async (
             shouldRename: false,
             newConversationName: null,
           };
+ // ✅ ADD THIS CHECK FOR RENAME LOGIC
+    let actualShouldRename = shouldRename;
+    
+    // Check if conversation needs renaming (if it's "New Conversation")
+    if (!actualShouldRename) {
+      actualShouldRename = true; // ✅ Always attempt rename for new conversations
+      console.log("✅ Will check rename in background");
+    }
 
     const userInfo =
       userInfoResult.status === "fulfilled" && userInfoResult.value?.length > 0
@@ -1218,7 +1280,6 @@ for await (const chunk of stream) {
       
       if (cleanText.length > 3) {
         ttsChunkCount++;
-        const ttsStartTime = Date.now();
         
         console.log(`🔊 [TTS Send #${ttsChunkCount}] Sending: "${cleanText}"`);
         
@@ -1228,16 +1289,17 @@ for await (const chunk of stream) {
             type: "Speak",
             text: cleanText,
             model_options: {
-              speed: 1.6, // ✅ FASTER SPEED
+              speed: 1.8, // ✅ KEEP FAST SPEED
               pitch: 0.0,
               emphasis: 0.0,
             },
           }));
           
-          // ✅ IMMEDIATE FLUSH FOR FAST RESPONSE
-          ttsSocket.send(JSON.stringify({ type: "Flush" }));
-          
-          console.log(`🔊 [TTS Flush #${ttsChunkCount}] Flushed in ${Date.now() - ttsStartTime}ms`);
+          // ✅ REMOVE IMMEDIATE FLUSH - Only flush every 3rd sentence or at end
+          if (ttsChunkCount % 3 === 0) {
+            ttsSocket.send(JSON.stringify({ type: "Flush" }));
+            console.log(`🔊 [TTS Batch Flush #${Math.floor(ttsChunkCount/3)}]`);
+          }
           
           if (!firstTTSChunkTime) {
             firstTTSChunkTime = Date.now();
@@ -1261,7 +1323,7 @@ for await (const chunk of stream) {
   }
 }
 
-// ✅ SEND FINAL SENTENCE IF ANY REMAINS
+// ✅ SEND FINAL SENTENCE + FINAL FLUSH
 if (sentenceBuffer.trim().length > 0 && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
   const finalText = cleanMarkdownForTTS(sentenceBuffer.trim());
   if (finalText.length > 3) {
@@ -1273,14 +1335,15 @@ if (sentenceBuffer.trim().length > 0 && ttsSocket && ttsSocket.readyState === We
         type: "Speak",
         text: finalText,
         model_options: {
-          speed: 1.6,
+          speed: 1.8, // ✅ KEEP FAST SPEED
           pitch: 0.0,
           emphasis: 0.0,
         },
       }));
       
+      // ✅ FINAL FLUSH ONLY
       ttsSocket.send(JSON.stringify({ type: "Flush" }));
-      console.log(`🔊 [TTS Final] Flushed final sentence`);
+      console.log(`🔊 [TTS Final] Final flush completed`);
     } catch (error) {
       console.error("❌ [TTS Final Error]:", error.message);
     }
@@ -1371,14 +1434,13 @@ if (sentenceBuffer.trim().length > 0 && ttsSocket && ttsSocket.readyState === We
         }
       }
 
-      setImmediate(() => {
+            setImmediate(async () => {
         console.log(`🔄 [Background] Starting parallel background tasks`);
         const backgroundStartTime = Date.now();
 
-        // ✅ PARALLEL BACKGROUND PROCESSING
-        const backgroundTasks = [
-          // Database save (highest priority)
-          saveToDatabase(
+        try {
+          // ✅ SAVE TO DATABASE FIRST (synchronous)
+          await saveToDatabase(
             conversationId,
             userMessage,
             aiResponse,
@@ -1387,36 +1449,53 @@ if (sentenceBuffer.trim().length > 0 && ttsSocket && ttsSocket.readyState === We
             [],
             [],
             []
-          ),
+          );
+          console.log("✅ Database saved successfully");
 
-          // Rename conversation (if needed)
-          shouldRename
-            ? executeRename(conversationId, userMessage, userId)
-            : Promise.resolve(null),
+          // ✅ SMART RENAME CHECK - Only rename if actually needed
+          if (conversationId) {
+            try {
+              const convCheck = await executeQuery(
+                "SELECT name FROM conversations WHERE id = ? AND user_id = ?",
+                [conversationId, userId]
+              );
+              
+              if (convCheck && convCheck.length > 0) {
+                const currentName = convCheck[0].name;
+                if (currentName === "New Conversation" || currentName === "New Chat" || !currentName) {
+                  const renameResult = await executeRename(conversationId, userMessage, userId);
+                  if (renameResult.success && ws) {
+                    ws.send(JSON.stringify({
+                      type: "conversation_renamed",
+                      conversation_id: conversationId,
+                      new_name: renameResult.title,
+                      success: true,
+                    }));
+                    console.log(`✅ Conversation renamed to: "${renameResult.title}"`);
+                  }
+                }
+              }
+            } catch (renameError) {
+              console.error("❌ Rename failed:", renameError);
+            }
+          }
 
-          // Generate summary (lowest priority)
+          // ✅ GENERATE SUMMARY (lowest priority)
           generateAndSaveComprehensiveSummary(
             conversationId,
             userMessage,
             aiResponse,
             ""
-          ),
-        ];
+          ).catch(err => console.error("❌ Summary generation failed:", err));
 
-        Promise.allSettled(backgroundTasks)
-          .then((results) => {
-            const backgroundTime = Date.now() - backgroundStartTime;
-            console.log(
-              `✅ [Background] All tasks completed in ${backgroundTime}ms`
-            );
-            console.log(`   Database: ${results[0].status}`);
-            console.log(`   Rename: ${results[1].status}`);
-            console.log(`   Summary: ${results[2].status}`);
-          })
-          .catch((err) => {
-            console.error(`❌ [Background] Failed:`, err);
-          });
+          const backgroundTime = Date.now() - backgroundStartTime;
+          console.log(`✅ [Background] Core tasks completed in ${backgroundTime}ms`);
+          
+        } catch (error) {
+          console.error("❌ Background tasks failed:", error);
+        }
       });
+
 
       // REPLACE WITH:
       // ✅ DETAILED PERFORMANCE LOGGING
@@ -1510,7 +1589,7 @@ console.log(
 // ✅ IMMEDIATE SENTENCE DETECTION for instant TTS
 // ✅ IMMEDIATE SENTENCE DETECTION for instant TTS
 function detectCompleteSentenceImmediate(text) {
-  if (!text || text.length < 4) return false;
+  if (!text || text.length < 6) return false; // ✅ REDUCED minimum length
   
   const words = text.trim().split(/\s+/);
   const wordCount = words.length;
@@ -1520,18 +1599,24 @@ function detectCompleteSentenceImmediate(text) {
     return true;
   }
   
-  // ✅ NATURAL PAUSES (5+ words)
-  if (wordCount >= 5 && /,\s+(and|but|or|so|yet|because|since|although|while|when|if)\s+\w+/i.test(text)) {
+  // ✅ FASTER TRIGGERS - Send after just 4 words for common patterns
+  if (wordCount >= 4 && /^(Hi|Hello|I'm|My name|Yes|No|Sure|Of course)\b/i.test(text.trim())) {
     return true;
   }
   
-  // ✅ EMERGENCY BREAK (15+ words)
-  if (wordCount >= 15) {
+  // ✅ NATURAL PAUSES - reduced word count
+  if (wordCount >= 6 && /,\s+(and|but|however|therefore)\s+\w+/i.test(text)) {
+    return true;
+  }
+  
+  // ✅ EMERGENCY BREAK - reduced from 15 to 10 words
+  if (wordCount >= 10) {
     return true;
   }
   
   return false;
 }
+
 
 // ✅ CLEAN MARKDOWN FOR TTS - Remove formatting for natural speech
 function cleanMarkdownForTTS(text) {
