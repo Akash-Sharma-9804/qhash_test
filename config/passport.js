@@ -207,7 +207,7 @@ passport.use(
         }
       } catch (error) {
         console.error("❌ Error in Google Strategy:", error);
-        return done(new Error("Unhandled error in Google strategy."), null);
+        return done(new Error("Login failed please try after sometime."), null);
       }
     }
   )

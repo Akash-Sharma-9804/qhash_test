@@ -496,43 +496,7 @@ Remember: Accuracy and helpfulness are more important than being brief. Users ne
   return finalMessages;
 }
 
-// ✅ HELPER FUNCTION: Clean markdown formatting for TTS
-function cleanMarkdownForTTS(text) {
-  if (!text) return text;
-
-  return (
-    text
-      // Remove bold formatting: **text** or __text__ -> text
-      .replace(/\*\*(.*?)\*\*/g, "$1")
-      .replace(/__(.*?)__/g, "$1")
-
-      // Remove italic formatting: *text* or _text_ -> text
-      .replace(/\*(.*?)\*/g, "$1")
-      .replace(/_(.*?)_/g, "$1")
-
-      // Remove strikethrough: ~~text~~ -> text
-      .replace(/~~(.*?)~~/g, "$1")
-
-      // Remove code formatting: `code` -> code
-      .replace(/`(.*?)`/g, "$1")
-
-      // Remove headers: # Header -> Header
-      .replace(/^#{1,6}\s+/gm, "")
-
-      // Remove list markers: - item or * item -> item
-      .replace(/^[\s]*[-\*\+]\s+/gm, "")
-
-      // Remove numbered list markers: 1. item -> item
-      .replace(/^[\s]*\d+\.\s+/gm, "")
-
-      // Remove links: [text](url) -> text
-      .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1")
-
-      // Remove extra whitespace and normalize
-      .replace(/\s+/g, " ")
-      .trim()
-  );
-}
+ 
 
 const SILENT_PCM_FRAME = Buffer.alloc(320, 0);
 let silenceInterval = null;
@@ -541,11 +505,12 @@ const startSendingSilence = (socket) => {
   stopSendingSilence();
   silenceInterval = setInterval(() => {
     if (socket.readyState === WebSocket.OPEN) {
-      const silenceFrame = Buffer.alloc(320);
+      const silenceFrame = Buffer.alloc(320, 0); // ✅ Explicitly fill with zeros
       socket.send(silenceFrame);
     }
-  }, 200);
+  }, 50); // ✅ Reduced interval for better connection maintenance
 };
+
 
 const stopSendingSilence = () => {
   if (silenceInterval) {
@@ -665,8 +630,8 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
   }
 
   // ✅ Initialize Deepgram STT WebSocket
-  const deepgramSocket = new WebSocket(
-    "wss://api.deepgram.com/v1/listen?model=nova-3&language=en-US&punctuate=true&smart_format=true&vad_events=true&interim_results=false&encoding=linear16&sample_rate=16000",
+   const deepgramSocket = new WebSocket(
+      "wss://api.deepgram.com/v1/listen?model=nova-2&language=en-US&punctuate=true&smart_format=true&vad_events=true&interim_results=true&encoding=linear16&sample_rate=16000",
     {
       headers: {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
@@ -677,12 +642,13 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
   // ✅ Initialize Deepgram TTS WebSocket for streaming audio
   let ttsSocket = null;
   let isTTSReady = false;
+let ttsAudioChunkBuffer = [];
 
   const initializeTTSSocket = () => {
   console.log("🔊 [TTS Init] Initializing TTS WebSocket...");
   
   ttsSocket = new WebSocket(
-    "wss://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&sample_rate=24000&container=none&buffer_size=250",
+    "wss://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&sample_rate=24000&container=none&buffer_size=150",
     {
       headers: {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
@@ -706,62 +672,87 @@ const handleLiveVoiceMessage = async (ws, userId, conversationId) => {
   // ✅ ULTRA-FAST AUDIO FORWARDING
 // ✅ OPTIMIZED TTS MESSAGE HANDLER - IMMEDIATE FORWARDING
 // ✅ OPTIMIZED TTS MESSAGE HANDLER - IMMEDIATE FORWARDING
-ttsSocket.on("message", (data) => {
-  try {
-    // ✅ CHECK FOR JSON METADATA FIRST
-    if (data.toString().startsWith("{")) {
-      const message = JSON.parse(data.toString());
+  isFinalTTSOfResponse = true;
+let ttsChunkNumber = 0;
+   ttsSocket.on("message", (data) => {
+      try {
+        // ✅ Handle JSON metadata
+        if (data.toString().startsWith("{")) {
+          const message = JSON.parse(data.toString());
 
-      if (message.type === "Results") {
-        console.log("📊 [TTS] Metadata received");
-        return;
-     } else if (message.type === "Flushed") {
-        console.log("🔊 [TTS] Flush completed - Ready for new input");
-        // ✅ RESUME STT WHEN TTS FLUSH COMPLETES
-        if (sttPaused && !isGenerating) {
-          setTimeout(() => {
-            resumeSTT();
-          }, 500); // Small delay to ensure audio starts playing
-        }
-        return;
-      } else if (message.type === "Warning") {
-        console.warn("⚠️ [TTS] Warning received:", message);
-        return;
-      }
+          if (message.type === "Results") {
+            console.log("📊 [TTS] Metadata received");
+            return;
+          } else if (message.type === "Flushed") {
+  console.log("🔊 [TTS] Flush completed - sending buffered audio chunks to frontend");
+
+  // Send all buffered audio chunks for THIS Speak, mark last as is_final: true
+  if (ws && ws.readyState === WebSocket.OPEN && ttsAudioChunkBuffer.length > 0) {
+    for (let i = 0; i < ttsAudioChunkBuffer.length; i++) {
+      ws.send(JSON.stringify({
+  type: "tts-audio-chunk",
+  audio: ttsAudioChunkBuffer[i].toString("base64"),
+  encoding: "linear16",
+  sample_rate: 24000,
+  chunk_number: ttsChunksReceived - ttsAudioChunkBuffer.length + i + 1,
+  chunk_size: ttsAudioChunkBuffer[i].length,
+  timestamp: Date.now(),
+  is_final: i === ttsAudioChunkBuffer.length - 1 // true for last chunk of this Speak
+}));
+
+// After sending the last chunk of the last Speak (i.e., after the buffer loop and only if this is the last response)
+// You need a flag to know when the entire response is done. 
+// The best place is after the FINAL Flush (after all TTS chunks for the response are sent).
+if (
+  i === ttsAudioChunkBuffer.length - 1 // last chunk of this Speak
+  && isFinalTTSOfResponse // <-- you need to set this flag when the last TTS Flush is done for the response
+) {
+  ws.send(JSON.stringify({
+    type: "tts-complete",
+    total_chunks: ttsChunksReceived
+  }));
+}
+
     }
-
-    // ✅ HANDLE BINARY AUDIO DATA - IMMEDIATE FORWARDING
-    if (Buffer.isBuffer(data) && data.length > 100) { // ✅ MINIMUM SIZE CHECK
-      ttsChunksReceived++;
-      totalTTSBytes += data.length;
-
-      if (!ttsStreamStartTime) {
-        ttsStreamStartTime = Date.now();
-        const streamLatency = ttsStreamStartTime - ttsStartTime;
-        console.log(`🔊 [TTS Stream] First audio received in ${streamLatency}ms`);
-      }
-
-      // ✅ IMMEDIATE FORWARDING TO FRONTEND
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: "tts-audio-chunk",
-          audio: data.toString("base64"),
-          encoding: "linear16",
-          sample_rate: 24000,
-          chunk_number: ttsChunksReceived,
-          chunk_size: data.length,
-          timestamp: Date.now() // ✅ ADD TIMESTAMP FOR DEBUGGING
-        }));
-
-        console.log(`🔊 [TTS] Forwarded chunk #${ttsChunksReceived} (${data.length} bytes)`);
-      }
-    } else if (Buffer.isBuffer(data) && data.length <= 100) {
-      console.log(`🔊 [TTS] Skipping small chunk (${data.length} bytes)`);
-    }
-  } catch (parseError) {
-    console.error("❌ [TTS] Parse error:", parseError.message);
+    ttsAudioChunkBuffer = []; // Clear for next Speak
   }
-});
+
+  // DO NOT send tts-complete here unless this is the last Speak of the whole response!
+  // Only send tts-complete when the entire response is done (your existing logic).
+  return;
+}
+
+else if (message.type === "Warning") {
+            console.warn("⚠️ [TTS] Warning:", message);
+            return;
+          }
+        }
+
+        // ✅ IMMEDIATE AUDIO FORWARDING WITH PROPER TRACKING
+               // ✅ IMMEDIATE AUDIO FORWARDING WITH PROPER TRACKING
+       if (Buffer.isBuffer(data) && data.length > 50) {
+  // Buffer the chunk for this Speak
+  ttsAudioChunkBuffer.push(data);
+
+  ttsChunksReceived++;
+  ttsChunkNumber++;
+  totalTTSBytes += data.length;
+  backendChunksSent++;
+
+  if (!ttsStreamStartTime) {
+    ttsStreamStartTime = Date.now();
+    const streamLatency = ttsStreamStartTime - ttsStartTime;
+    console.log(`🔊 [TTS Stream] First audio in ${streamLatency}ms`);
+  }
+  // Do NOT send to frontend yet!
+}
+
+      } catch (parseError) {
+        console.error("❌ [TTS] Parse error:", parseError.message);
+      }
+    });
+
+
 
 
 
@@ -780,167 +771,225 @@ ttsSocket.on("message", (data) => {
   // Initialize TTS socket
   initializeTTSSocket();
 
+  // let isDGReady = false;
+  // let isGenerating = false;
+  // let transcriptBuffer = "";
+  // const audioQueue = [];
+  // let aiTriggerTimeout = null;
+  // let keepAliveInterval = null;
+
+  // // ✅ RESET TRANSCRIPT BUFFERS FOR NEW SESSION
+  // let liveTranscriptBuffer = "";
+  // let lastProcessTime = 0;
+  // const LIVE_PROCESS_INTERVAL = 2000;
+
+  // // ADD THESE PERFORMANCE TRACKING VARIABLES:
+  // // ✅ Performance tracking
+  // let ttsChunksReceived = 0;
+  // let totalTTSBytes = 0;
+  // let ttsStreamStartTime = null;
+// ✅ OPTIMIZED STATE MANAGEMENT
+ // ✅ OPTIMIZED STATE MANAGEMENT
+ // ✅ OPTIMIZED STATE MANAGEMENT
   let isDGReady = false;
   let isGenerating = false;
-  let transcriptBuffer = "";
+  let sttPaused = false;
+  
+  // ✅ LIVE TRANSCRIPT PROCESSING
+  let liveTranscriptBuffer = "";
+  let finalTranscriptBuffer = "";
+  let transcriptBuffer = ""; // ✅ ADD MISSING VARIABLE
+  let lastSpeechTime = 0;
+  let speechEndTimeout = null;
+  let aiTriggerTimeout = null; // ✅ ADD MISSING VARIABLE
+  let isUserSpeaking = false;
   const audioQueue = [];
-  let aiTriggerTimeout = null;
   let keepAliveInterval = null;
 
-  // ✅ RESET TRANSCRIPT BUFFERS FOR NEW SESSION
-  let liveTranscriptBuffer = "";
-  let lastProcessTime = 0;
-  const LIVE_PROCESS_INTERVAL = 2000;
-
-  // ADD THESE PERFORMANCE TRACKING VARIABLES:
   // ✅ Performance tracking
   let ttsChunksReceived = 0;
   let totalTTSBytes = 0;
   let ttsStreamStartTime = null;
+  let sttStartTime = null;
+  let aiStartTime = null;
+  let ttsStartTime = null;
+  let firstAIChunkTime = null;
+  let firstTTSChunkTime = null;
 
-  const TRIGGER_DELAY = 600;
+  // ✅ ADD FRONTEND TRACKING VARIABLES
+  let frontendChunksReceived = 0;
+  let frontendChunksPlayed = 0;
+  let backendChunksSent = 0;
+let lastTranscriptSent = ""; // Add at top-level state
+
+
+  // ✅ SPEECH DETECTION CONSTANTS
+  const SPEECH_END_DELAY = 800; // ✅ Reduced from 2000ms to 800ms
+  const VAD_SILENCE_THRESHOLD = 1200; // ✅ 1.2 seconds of silence triggers processing
+
 
   // ✅ ADD THESE STT CONTROL FUNCTIONS HERE
-  let sttPaused = false; // ✅ ADD THIS FLAG
+  // let sttPaused = false; // ✅ ADD THIS FLAG
 
-  function pauseSTT() {
+    function pauseSTT() {
     console.log("⏸️ [STT] Pausing speech recognition");
-    sttPaused = true; // ✅ SET PAUSE FLAG
-    // Stop processing new audio while AI responds
+    sttPaused = true;
+    
+    // ✅ CLEAR ANY PENDING TIMEOUTS
+    if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
+    
+    // Keep connection alive with silence
     if (deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
-      // Send silence to maintain connection but ignore responses
       startSendingSilence(deepgramSocket);
+      console.log("🔄 [STT] Started sending silence to Deepgram");
     }
   }
 
   function resumeSTT() {
     console.log("▶️ [STT] Resuming speech recognition");
-    sttPaused = false; // ✅ CLEAR PAUSE FLAG
+    sttPaused = false;
     stopSendingSilence();
-    // Reset transcript buffer for new user input
+    
+    // ✅ RESET ALL TRANSCRIPT BUFFERS
+    liveTranscriptBuffer = "";
+    finalTranscriptBuffer = "";
     transcriptBuffer = "";
+    
+    // ✅ RESET TIMING AND STATE
     sttStartTime = null;
+    isUserSpeaking = false;
+    lastSpeechTime = 0;
+    
+    // ✅ CLEAR ANY PENDING TIMEOUTS
+    if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
   }
 
 
-  // ✅ REPLACE the existing processLiveTranscript function with this
-  async function processCompleteTranscript(finalText) {
-    if (isGenerating || !finalText) return;
+ // ✅ ADD MISSING FUNCTION
+  async function processCompleteTranscript(transcript) {
+    if (isGenerating || !transcript || transcript.trim().length < 2) return;
 
-    // ✅ PROPER TIMING CALCULATION
     const sttTotalTime = sttStartTime ? Date.now() - sttStartTime : 0;
-    console.log(`✅ [Processing Complete Message] ${finalText}`);
+    console.log(`✅ [Processing Complete Message] "${transcript}" (STT: ${sttTotalTime}ms)`);
     console.log(`🚀 [STT Complete] Total STT time: ${sttTotalTime}ms`);
+
+    // Reset transcript buffer
+    transcriptBuffer = "";
+     lastTranscriptSent = "";
+    // Process the speech
+    await processUserSpeech(transcript);
+  }
+
+  // ✅ OPTIMIZED TRANSCRIPT PROCESSING
+  async function processUserSpeech(transcript) {
+    if (isGenerating || !transcript || transcript.trim().length < 2) return;
+
+    const sttTotalTime = sttStartTime ? Date.now() - sttStartTime : 0;
+    console.log(`✅ [Processing Speech] "${transcript}" (STT: ${sttTotalTime}ms)`);
 
     aiStartTime = Date.now();
     isGenerating = true;
-
-    // ✅ PAUSE STT IMMEDIATELY
     pauseSTT();
 
-    // 🚀 Send user message to frontend IMMEDIATELY
-    ws.send(
-      JSON.stringify({
-        type: "user-message",
-        text: finalText,
-        conversation_id: conversationId,
-      })
-    );
+    // ✅ Send user message immediately
+    ws.send(JSON.stringify({
+      type: "user-message",
+      text: transcript,
+      conversation_id: conversationId,
+    }));
 
-    // ✅ Signal TTS start IMMEDIATELY
+    // ✅ Start TTS preparation
     ttsStartTime = Date.now();
-    ws.send(
-      JSON.stringify({
-        type: "tts-start",
-        message: "Starting audio generation...",
-      })
-    );
+    ws.send(JSON.stringify({
+      type: "tts-start",
+      message: "Generating response...",
+    }));
 
     ws.send(JSON.stringify({ type: "bot-typing", status: true }));
 
-    // 🚀 Call enhanced fetchDeepseekAI with streaming TTS
+    // ✅ Process with AI
+    // ✅ Process with AI
     const aiResponse = await fetchDeepseekAIWithTTS(
-      finalText,
+      transcript,
       userId,
       conversationId,
       ws,
       ttsSocket,
-      { ttsChunksReceived, totalTTSBytes, ttsStreamStartTime }
+      { 
+        ttsChunksReceived, 
+        totalTTSBytes, 
+        ttsStreamStartTime,
+        frontendChunksReceived,
+        frontendChunksPlayed,
+        backendChunksSent
+      }
     );
+
 
     const aiTotalTime = Date.now() - aiStartTime;
-    console.log(`🤖 [AI Complete] Total AI processing time: ${aiTotalTime}ms`);
+    console.log(`🤖 [AI Complete] ${aiTotalTime}ms`);
 
-    console.log(`🤖 [DeepSeek] Response completed`);
+    ws.send(JSON.stringify({
+      type: "tts-end",
+      message: "Response ready - playing audio",
+    }));
 
-    ws.send(
-      JSON.stringify({
-        type: "tts-end",
-        message: "Audio generation completed",
-      })
-    );
-
-    // ✅ RESUME STT AFTER AI COMPLETES
+    // ✅ Reset for next interaction
     setTimeout(() => {
-      transcriptBuffer = "";
       liveTranscriptBuffer = "";
-      lastProcessTime = 0;
+      finalTranscriptBuffer = "";
+      
+      lastSpeechTime = 0;
       isGenerating = false;
-      resumeSTT();
+      // resumeSTT();
       ws.send(JSON.stringify({ type: "bot-typing", status: false }));
 
-      // Reset timing variables
+      // Reset timing
       sttStartTime = null;
       aiStartTime = null;
       ttsStartTime = null;
       firstAIChunkTime = null;
       firstTTSChunkTime = null;
-    }, 1000); // Small delay to ensure TTS starts playing
+    }, 500); // ✅ Reduced delay
   }
 
-  function shutdown(reason = "unknown") {
+   function shutdown(reason = "unknown") {
     console.log(
       `🛑 [Cleanup] Shutting down voice for user: ${userId}. Reason: ${reason}`
     );
 
     stopSendingSilence();
     clearInterval(keepAliveInterval);
-    clearTimeout(aiTriggerTimeout);
+    clearTimeout(speechEndTimeout);
+    clearTimeout(aiTriggerTimeout); // ✅ ADD MISSING CLEANUP
 
-    if (
-      deepgramSocket?.readyState === WebSocket.OPEN ||
-      deepgramSocket?.readyState === WebSocket.CONNECTING
-    ) {
+    if (deepgramSocket?.readyState === WebSocket.OPEN || deepgramSocket?.readyState === WebSocket.CONNECTING) {
       deepgramSocket.terminate();
-      console.log("💥 Deepgram STT terminated");
     }
 
-    // ✅ Close TTS socket
-    if (
-      ttsSocket?.readyState === WebSocket.OPEN ||
-      ttsSocket?.readyState === WebSocket.CONNECTING
-    ) {
+    if (ttsSocket?.readyState === WebSocket.OPEN || ttsSocket?.readyState === WebSocket.CONNECTING) {
       ttsSocket.terminate();
-      console.log("💥 Deepgram TTS terminated");
     }
 
-    if (
-      ws?.readyState === WebSocket.OPEN ||
-      ws?.readyState === WebSocket.CONNECTING
-    ) {
+    if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) {
       ws.close();
-      console.log("🔌 Client WebSocket closed");
     }
   }
 
-  deepgramSocket.on("open", () => {
+
+
+   deepgramSocket.on("open", () => {
     console.log("✅ [STT] Deepgram STT Connection opened");
 
+    // ✅ IMPROVED KEEP-ALIVE - Send actual audio data to prevent timeout
     keepAliveInterval = setInterval(() => {
       if (deepgramSocket.readyState === WebSocket.OPEN) {
-        deepgramSocket.ping();
+        // Send small silence frame to keep connection alive
+        const silenceFrame = Buffer.alloc(320, 0); // 20ms of silence at 16kHz
+        deepgramSocket.send(silenceFrame);
+        console.log("🔄 [STT] Sent keep-alive silence frame");
       }
-    }, 10000);
+    }, 250); // ✅ Reduced from 8000ms to 5000ms
 
     isDGReady = true;
 
@@ -949,7 +998,8 @@ ttsSocket.on("message", (data) => {
     }
   });
 
-   deepgramSocket.on("message", (msg) => {
+
+ deepgramSocket.on("message", (msg) => {
     try {
       // ✅ IGNORE ALL STT MESSAGES WHEN PAUSED
       if (sttPaused || isGenerating) {
@@ -963,47 +1013,72 @@ ttsSocket.on("message", (data) => {
       if (transcript && transcript.trim() !== "") {
         if (!sttStartTime) sttStartTime = Date.now();
         console.log(`📝 [Live Transcript] ${transcript}`);
-        
-        // ✅ Build transcript buffer
-        transcriptBuffer += transcript + " ";
-        
-        // Send live transcript to frontend for display
-        ws.send(JSON.stringify({ type: "transcript", text: transcript }));
 
-        // ✅ ONLY process on is_final OR after silence timeout
+        
+      // Only send if transcript changed
+      if (transcript !== lastTranscriptSent) {
+        ws.send(JSON.stringify({ 
+          type: "transcript", 
+          text: transcript,
+          is_final: data.is_final || false
+        }));
+        lastTranscriptSent = transcript;
+      }
+        
+        // ✅ ONLY ADD TO BUFFER IF IT'S FINAL - Prevents duplicates
         if (data.is_final) {
+          transcriptBuffer += transcript + " ";
           console.log(`✅ [Final Transcript] ${transcriptBuffer.trim()}`);
           
           // Clear any existing timeout
           if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
           
-          // Set timeout to wait for more speech (2 seconds of silence)
+          // ✅ REDUCED timeout for faster response
           aiTriggerTimeout = setTimeout(() => {
             if (!isGenerating && !sttPaused && transcriptBuffer.trim()) {
               processCompleteTranscript(transcriptBuffer.trim());
+                    // Clear buffer and last sent after processing
+            transcriptBuffer = "";
+            lastTranscriptSent = "";
             }
-          }, 2000); // Wait 2 seconds after final transcript
+          }, 800);
         }
+        
+        // Send live transcript to frontend for display (interim results)
+        // ws.send(JSON.stringify({ 
+        //   type: "transcript", 
+        //   text: transcript,
+        //   is_final: data.is_final || false
+        // }));
       }
 
-      // ✅ Handle VAD (Voice Activity Detection) events
+      // ✅ IMPROVED VAD Detection for faster silence detection
       if (data.type === "Results" && data.channel?.alternatives?.[0]?.transcript === "") {
         // This indicates silence/pause
         if (transcriptBuffer.trim() && !isGenerating && !sttPaused) {
           if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
           
-          // Shorter timeout for silence detection
+          // ✅ MUCH FASTER silence detection
           aiTriggerTimeout = setTimeout(() => {
             if (!isGenerating && !sttPaused && transcriptBuffer.trim()) {
               processCompleteTranscript(transcriptBuffer.trim());
             }
-          }, 1500); // 1.5 seconds of silence triggers processing
+          }, 600);
         }
       }
+
+      // ✅ ADD SPEECH ACTIVITY DETECTION
+      if (data.type === "SpeechStarted") {
+        isUserSpeaking = true;
+        lastSpeechTime = Date.now();
+        if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
+      }
+
     } catch (err) {
       console.error("❌ [Parse Error]", err);
     }
   });
+
 
 
   deepgramSocket.on("error", (err) => {
@@ -1020,37 +1095,103 @@ ttsSocket.on("message", (data) => {
     );
   });
 
-    ws.on("message", (data) => {
-    try {
-      if (!Buffer.isBuffer(data)) {
-        const parsed = JSON.parse(data.toString());
-        if (parsed.type === "stop-voice") {
-          console.log("🛑 [Voice] stop-voice received from client");
-          shutdown("stop-voice from client");
-          return;
-        }
-        // ✅ ADD MANUAL TRIGGER FOR PROCESSING
-        if (parsed.type === "force-process" && transcriptBuffer.trim()) {
-          if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
-          processCompleteTranscript(transcriptBuffer.trim());
-          return;
-        }
+ 
+
+ws.on("message", (data) => {
+  // Try to handle both Buffer and string messages for maximum compatibility
+  let parsed = null;
+  let isJSON = false;
+
+  // 1. Try to parse Buffer as JSON if possible
+  if (Buffer.isBuffer(data)) {
+    const asString = data.toString();
+    if (asString.startsWith("{")) {
+      try {
+        parsed = JSON.parse(asString);
+        isJSON = true;
+        console.log("🔍 [Voice WS] Received JSON message (from Buffer):", parsed.type, parsed);
+      } catch (e) {
+        // Not JSON, treat as binary audio
+        isJSON = false;
       }
-    } catch (err) {
-      console.error("❌ [Voice] Error handling message", err);
+    }
+  } else if (typeof data === "string") {
+    try {
+      parsed = JSON.parse(data);
+      isJSON = true;
+      console.log("🔍 [Voice WS] Received message (string):", parsed.type, parsed);
+    } catch (e) {
+      isJSON = false;
+    }
+  }
+
+  // 2. If JSON, handle control messages
+  if (isJSON && parsed) {
+    if (parsed.type === "stop-voice") {
+      console.log("🛑 [Voice] stop-voice received from client");
+      shutdown("stop-voice from client");
+      return;
     }
 
-    // ✅ ONLY PROCESS AUDIO IF NOT GENERATING AND NOT PAUSED
-    if (Buffer.isBuffer(data) && !isGenerating && !sttPaused) {
-      if (isDGReady && deepgramSocket.readyState === WebSocket.OPEN) {
-        deepgramSocket.send(data);
-      } else {
-        audioQueue.push(data);
-      }
-    } else if (Buffer.isBuffer(data) && (isGenerating || sttPaused)) {
-      console.log("🔇 [Audio] Dropping audio chunk - AI is responding");
+    // ✅ TRACK FRONTEND AUDIO CHUNKS
+    if (parsed.type === "audio-chunk-received") {
+      frontendChunksReceived++;
+      console.log(`📥 [Frontend] Received chunk #${parsed.chunk_number} (${frontendChunksReceived}/${ttsChunksReceived})`);
+      return;
     }
-  });
+
+    if (parsed.type === "audio-chunk-played") {
+      frontendChunksPlayed++;
+      console.log(`🔊 [Frontend] Played chunk #${parsed.chunk_number} (${frontendChunksPlayed}/${ttsChunksReceived})`);
+      return;
+    }
+
+    // ✅ HANDLE FRONTEND AUDIO STATE MESSAGES
+    if (parsed.type === "audio-playback-started") {
+      console.log("🔊 [Frontend] Audio playback started - keeping STT paused");
+      if (!sttPaused) {
+        pauseSTT();
+      }
+      return;
+    }
+
+    if (parsed.type === "audio-playback-ended") {
+  console.log(`🔊 [Frontend] Audio playback ended - resuming STT`);
+  console.log(`📊 [Audio Stats] Backend sent: ${ttsChunksReceived}, Frontend received: ${frontendChunksReceived}, Frontend played: ${frontendChunksPlayed}`);
+  // Reset counters for next interaction
+  frontendChunksReceived = 0;
+  frontendChunksPlayed = 0;
+  ttsChunksReceived = 0;
+  totalTTSBytes = 0;
+  // Resume STT immediately, regardless of isGenerating
+  if (sttPaused) {
+    resumeSTT();
+  }
+  return;
+}
+
+
+    // ✅ ADD MANUAL TRIGGER FOR PROCESSING
+    if (parsed.type === "force-process" && transcriptBuffer.trim()) {
+      if (aiTriggerTimeout) clearTimeout(aiTriggerTimeout);
+      processCompleteTranscript(transcriptBuffer.trim());
+      return;
+    }
+    return; // Don't fall through to audio processing
+  }
+
+  // 3. If not JSON, treat as audio
+  if (Buffer.isBuffer(data) && !isGenerating && !sttPaused) {
+    if (isDGReady && deepgramSocket.readyState === WebSocket.OPEN) {
+      deepgramSocket.send(data);
+    } else {
+      audioQueue.push(data);
+    }
+  } else if (Buffer.isBuffer(data) && (isGenerating || sttPaused)) {
+    console.log("🔇 [Audio] Dropping audio chunk - AI is responding");
+  }
+});
+
 
 
   ws.on("close", () => {
@@ -1184,14 +1325,18 @@ const fetchDeepseekAIWithTTS = async (
     );
  
    // ✅ REPLACE the existing timing variables section with:
+   // ✅ REPLACE the existing timing variables section with:
 let aiResponse = "";
 const aiStartTime = Date.now();
 
-// ✅ FIXED TTS TIMING VARIABLES
-let ttsStreamStartTime = null;
+// ✅ EXTRACT VARIABLES FROM ttsMetrics
+let ttsStreamStartTime = ttsMetrics?.ttsStreamStartTime || null;
 let firstTTSChunkTime = null;
-let ttsChunksReceived = 0;
-let totalTTSBytes = 0;
+let ttsChunksReceived = ttsMetrics?.ttsChunksReceived || 0;
+let totalTTSBytes = ttsMetrics?.totalTTSBytes || 0;
+let frontendChunksReceived = ttsMetrics?.frontendChunksReceived || 0;
+let frontendChunksPlayed = ttsMetrics?.frontendChunksPlayed || 0;
+let backendChunksSent = ttsMetrics?.backendChunksSent || 0;
 let ttsStartTime = Date.now(); // ✅ ADD THIS LINE
 
 
@@ -1272,44 +1417,50 @@ for await (const chunk of stream) {
     aiResponse += content;
     sentenceBuffer += content;
 
-    // ✅ IMMEDIATE SENTENCE DETECTION
+    // ✅ IMMEDIATE SENTENCE DETECTION WITH CHUNKING
     const shouldSendTTS = detectCompleteSentenceImmediate(sentenceBuffer.trim());
 
     if (shouldSendTTS && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-      const cleanText = cleanMarkdownForTTS(sentenceBuffer.trim());
+      let cleanText = cleanMarkdownForTTS(sentenceBuffer.trim());
       
       if (cleanText.length > 3) {
-        ttsChunkCount++;
+        // ✅ CHUNK LARGE SENTENCES TO PREVENT DELAYS
+        const chunks = chunkLargeSentence(cleanText);
         
-        console.log(`🔊 [TTS Send #${ttsChunkCount}] Sending: "${cleanText}"`);
-        
-        try {
-          // ✅ SEND TO TTS IMMEDIATELY
-          ttsSocket.send(JSON.stringify({
-            type: "Speak",
-            text: cleanText,
-            model_options: {
-              speed: 1.8, // ✅ KEEP FAST SPEED
-              pitch: 0.0,
-              emphasis: 0.0,
-            },
-          }));
+        for (const textChunk of chunks) {
+          ttsChunkCount++;
           
-          // ✅ REMOVE IMMEDIATE FLUSH - Only flush every 3rd sentence or at end
-          if (ttsChunkCount % 3 === 0) {
-            ttsSocket.send(JSON.stringify({ type: "Flush" }));
-            console.log(`🔊 [TTS Batch Flush #${Math.floor(ttsChunkCount/3)}]`);
+          console.log(`🔊 [TTS Send #${ttsChunkCount}] Sending: "${textChunk}"`);
+          
+          try {
+            // ✅ SEND TO TTS IMMEDIATELY
+            ttsSocket.send(JSON.stringify({
+              type: "Speak",
+              text: textChunk,
+              model_options: {
+                speed: 1.8,
+                pitch: 0.0,
+                emphasis: 0.0,
+              },
+            }));
+            
+            // ✅ FLUSH MORE FREQUENTLY FOR FASTER AUDIO
+            if (ttsChunkCount % 2 === 0) {
+              ttsSocket.send(JSON.stringify({ type: "Flush" }));
+              console.log(`🔊 [TTS Batch Flush #${Math.floor(ttsChunkCount/2)}]`);
+            }
+            
+            if (!firstTTSChunkTime) {
+              firstTTSChunkTime = Date.now();
+              console.log(`🔊 [TTS First] Sent in ${firstTTSChunkTime - ttsStartTime}ms`);
+            }
+            
+          } catch (ttsError) {
+            console.error("❌ [TTS Send Error]:", ttsError.message);
           }
-          
-          if (!firstTTSChunkTime) {
-            firstTTSChunkTime = Date.now();
-            console.log(`🔊 [TTS First] Sent in ${firstTTSChunkTime - ttsStartTime}ms`);
-          }
-          
-          sentenceBuffer = ""; // ✅ RESET BUFFER IMMEDIATELY
-        } catch (ttsError) {
-          console.error("❌ [TTS Send Error]:", ttsError.message);
         }
+        
+        sentenceBuffer = ""; // ✅ RESET BUFFER IMMEDIATELY
       }
     }
 
@@ -1325,28 +1476,33 @@ for await (const chunk of stream) {
 
 // ✅ SEND FINAL SENTENCE + FINAL FLUSH
 if (sentenceBuffer.trim().length > 0 && ttsSocket && ttsSocket.readyState === WebSocket.OPEN) {
-  const finalText = cleanMarkdownForTTS(sentenceBuffer.trim());
+  let finalText = cleanMarkdownForTTS(sentenceBuffer.trim());
   if (finalText.length > 3) {
-    ttsChunkCount++;
-    console.log(`🔊 [TTS Final] Sending: "${finalText}"`);
+    // ✅ CHUNK FINAL SENTENCE TOO
+    const finalChunks = chunkLargeSentence(finalText);
     
-    try {
-      ttsSocket.send(JSON.stringify({
-        type: "Speak",
-        text: finalText,
-        model_options: {
-          speed: 1.8, // ✅ KEEP FAST SPEED
-          pitch: 0.0,
-          emphasis: 0.0,
-        },
-      }));
+    for (const textChunk of finalChunks) {
+      ttsChunkCount++;
+      console.log(`🔊 [TTS Final #${ttsChunkCount}] Sending: "${textChunk}"`);
       
-      // ✅ FINAL FLUSH ONLY
-      ttsSocket.send(JSON.stringify({ type: "Flush" }));
-      console.log(`🔊 [TTS Final] Final flush completed`);
-    } catch (error) {
-      console.error("❌ [TTS Final Error]:", error.message);
+      try {
+        ttsSocket.send(JSON.stringify({
+          type: "Speak",
+          text: textChunk,
+          model_options: {
+            speed: 1.8,
+            pitch: 0.0,
+            emphasis: 0.0,
+          },
+        }));
+      } catch (error) {
+        console.error("❌ [TTS Final Error]:", error.message);
+      }
     }
+  
+    // ✅ FINAL FLUSH ONLY
+    ttsSocket.send(JSON.stringify({ type: "Flush" }));
+    console.log(`🔊 [TTS Final] Final flush completed`);
   }
 }
 
@@ -1500,11 +1656,11 @@ if (sentenceBuffer.trim().length > 0 && ttsSocket && ttsSocket.readyState === We
       // REPLACE WITH:
       // ✅ DETAILED PERFORMANCE LOGGING
 // ✅ FIXED PERFORMANCE LOGGING
+// ✅ ENHANCED PERFORMANCE LOGGING WITH TRACKING
 const totalProcessingTime = Date.now() - aiStartTime;
 const sttToAI = aiStartTime && sttStartTime ? aiStartTime - sttStartTime : 0;
 const aiFirstChunkLatency = firstAIChunkTime && aiStartTime ? firstAIChunkTime - aiStartTime : 0;
 const ttsFirstLatency = firstTTSChunkTime && ttsStartTime ? firstTTSChunkTime - ttsStartTime : 0;
-// ✅ FIX THE NEGATIVE TIMING ISSUE
 const ttsFirstAudio = ttsStreamStartTime && ttsStartTime && ttsStreamStartTime > ttsStartTime 
   ? ttsStreamStartTime - ttsStartTime 
   : 0;
@@ -1516,11 +1672,32 @@ console.log(`   🔊 TTS First Send: ${ttsFirstLatency}ms`);
 console.log(`   🔊 TTS First Audio: ${ttsFirstAudio}ms`);
 console.log(`   ⚡ Total Processing: ${totalProcessingTime}ms`);
 console.log(`   📊 AI Chunks: ${chunkCount} | TTS Sentences: ${ttsChunkCount || 0}`);
-console.log(`   📈 TTS Audio Chunks: ${ttsChunksReceived} (${(totalTTSBytes / 1024).toFixed(1)}KB)`);
+console.log(`   📈 Backend Audio Chunks: ${ttsChunksReceived} (${(totalTTSBytes / 1024).toFixed(1)}KB)`);
+console.log(`   📥 Frontend Received: ${frontendChunksReceived} | Played: ${frontendChunksPlayed}`);
+console.log(`   📊 Sync Status: ${frontendChunksReceived === ttsChunksReceived ? '✅ Synced' : '⚠️ Out of sync'}`);
 
 if (ttsChunkCount > 0 && ttsFirstAudio > 0) {
   console.log(`   🚀 Avg TTS Latency: ${Math.round(ttsFirstAudio / ttsChunkCount)}ms per sentence`);
 }
+
+// ✅ SEND FINAL STATS TO FRONTEND
+if (ws && ws.readyState === WebSocket.OPEN) {
+  ws.send(JSON.stringify({
+    type: "performance-stats",
+    stats: {
+      stt_to_ai: sttToAI,
+      ai_first_chunk: aiFirstChunkLatency,
+      tts_first_send: ttsFirstLatency,
+      tts_first_audio: ttsFirstAudio,
+      total_processing: totalProcessingTime,
+      backend_chunks_sent: ttsChunksReceived,
+      frontend_chunks_received: frontendChunksReceived,
+      frontend_chunks_played: frontendChunksPlayed,
+      sync_status: frontendChunksReceived === ttsChunksReceived
+    }
+  }));
+}
+
 
 
 // ✅ Add streaming performance metrics
@@ -1588,8 +1765,9 @@ console.log(
 
 // ✅ IMMEDIATE SENTENCE DETECTION for instant TTS
 // ✅ IMMEDIATE SENTENCE DETECTION for instant TTS
+// ✅ OPTIMIZED SENTENCE DETECTION - Prevents long delays
 function detectCompleteSentenceImmediate(text) {
-  if (!text || text.length < 6) return false; // ✅ REDUCED minimum length
+  if (!text || text.length < 3) return false;
   
   const words = text.trim().split(/\s+/);
   const wordCount = words.length;
@@ -1599,18 +1777,23 @@ function detectCompleteSentenceImmediate(text) {
     return true;
   }
   
-  // ✅ FASTER TRIGGERS - Send after just 4 words for common patterns
-  if (wordCount >= 4 && /^(Hi|Hello|I'm|My name|Yes|No|Sure|Of course)\b/i.test(text.trim())) {
+  // ✅ FASTER TRIGGERS - Send after just 3 words for common patterns
+  if (wordCount >= 3 && /^(Hi|Hello|I'm|My name|Yes|No|Sure|Of course|Thank you|You're welcome)\b/i.test(text.trim())) {
     return true;
   }
   
-  // ✅ NATURAL PAUSES - reduced word count
-  if (wordCount >= 6 && /,\s+(and|but|however|therefore)\s+\w+/i.test(text)) {
+  // ✅ NATURAL PAUSES - comma detection
+  if (wordCount >= 4 && /,\s+(and|but|however|therefore|also|then|now|so)\s+\w+/i.test(text)) {
     return true;
   }
   
-  // ✅ EMERGENCY BREAK - reduced from 15 to 10 words
-  if (wordCount >= 10) {
+  // ✅ PREVENT LONG DELAYS - Force break at 8 words
+  if (wordCount >= 8) {
+    return true;
+  }
+  
+  // ✅ CHARACTER LIMIT - Prevent extremely long sentences
+  if (text.length >= 100) {
     return true;
   }
   
@@ -1633,6 +1816,23 @@ function cleanMarkdownForTTS(text) {
     .replace(/\s+/g, ' ')            // Normalize whitespace
     .trim();
 }
+
+// ✅ NEW FUNCTION: Chunk large sentences to prevent TTS delays
+function chunkLargeSentence(text, maxLength = 80) {
+  if (!text || text.length <= maxLength) {
+    return [text];
+  }
+  const chunks = [];
+  let i = 0;
+  while (i < text.length) {
+    chunks.push(text.slice(i, i + maxLength));
+    i += maxLength;
+  }
+  console.log(`📝 [Chunking] Split "${text.substring(0, 50)}..." into ${chunks.length} equal chunks`);
+  return chunks;
+}
+
+
 
 
 
